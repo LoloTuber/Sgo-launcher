@@ -205,12 +205,6 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                 return parse_student_total(html)
             parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
         except Exception as exc:
-<<<<<<< Updated upstream
-            # Не удалось получить отчёт — отдаём средние с дашборда (текущий период).
-            data = results_data(dash)
-            data["error"] = str(exc)
-            return data
-=======
             # Пробрасываем ошибку явно: иначе пользователь видит одинаковые данные
             # дашборда (текущий триместр) на всех вкладках и не понимает, в чём дело.
             traceback.print_exc()
@@ -220,7 +214,6 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
             data["requestedTermId"] = term_id
             return data
 
->>>>>>> Stashed changes
         label = dash.get("termName") or ""
         if term_id:
             try:
@@ -231,9 +224,6 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                                 label = str(item.get("title") or "")
             except Exception:
                 pass
-<<<<<<< Updated upstream
-        return _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
-=======
 
         result = _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
 
@@ -250,7 +240,6 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
             )
         result["requestedTermId"] = term_id
         return result
->>>>>>> Stashed changes
 
 def lessons_for(state: AppState, day: date) -> List[Dict[str, Any]]:
     monday = day - timedelta(days=day.weekday())
