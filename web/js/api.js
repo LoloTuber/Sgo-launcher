@@ -22,6 +22,14 @@ export const getGrades = (term) => {
   return fetchJson(url);
 };
 
+export const getResults = (term, mode) => {
+  const params = new URLSearchParams();
+  if (term) params.set("term", term);
+  if (mode) params.set("mode", mode);
+  const qs = params.toString();
+  return fetchJson(qs ? `/api/results?${qs}` : "/api/results");
+};
+
 export const getDiary = (weekIso) => {
   const url = weekIso ? `/api/diary?week=${weekIso}` : "/api/diary";
   return fetchJson(url);
