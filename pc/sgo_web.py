@@ -196,6 +196,9 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
     with state.lock:
         state.connect()
         dash = dashboard_data(state)
+        current_term_id = str(dash.get("termId") or "")
+        current_term_name = str(dash.get("termName") or "")
+
         overrides = {}
         if term_id:
             overrides["TERMID"] = term_id
@@ -205,16 +208,34 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                 return parse_student_total(html)
             parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
         except Exception as exc:
-            # Пробрасываем ошибку явно: иначе пользователь видит одинаковые данные
-            # дашборда (текущий триместр) на всех вкладках и не понимает, в чём дело.
             traceback.print_exc()
             print(f"! StudentTotal ({term_id=}) failed: {exc}", file=sys.stderr)
+
+            # Если запрошен НЕ текущий период и отчёт не строится —
+            # НЕ подставляем данные дашборда (это будет вводить в заблуждение,
+            # потому что дашборд всегда показывает ТЕКУЩИЙ триместр).
+            if term_id and current_term_id and term_id != current_term_id:
+                return {
+                    "common": None,
+                    "subjects": [],
+                    "term": "",
+                    "mode": "year" if mode == "year" else "current",
+                    "finalAvailable": False,
+                    "asOf": "",
+                    "requestedTermId": term_id,
+                    "error": (
+                        f"Отчёт за выбранный период недоступен. "
+                        f"Скорее всего, этот триместр ещё не начался. ({exc})"
+                    ),
+                }
+
+            # Для текущего периода fallback на дашборд допустим.
             data = results_data(dash)
             data["error"] = f"Не удалось получить отчёт за выбранный период: {exc}"
             data["requestedTermId"] = term_id
             return data
 
-        label = dash.get("termName") or ""
+        label = current_term_name
         if term_id:
             try:
                 for src in state.reports.info("StudentTotal").get("filterSources") or []:
@@ -240,6 +261,7 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
             )
         result["requestedTermId"] = term_id
         return result
+
 
 def lessons_for(state: AppState, day: date) -> List[Dict[str, Any]]:
     monday = day - timedelta(days=day.weekday())
@@ -336,20 +358,66 @@ def schedule_data(state: AppState, week_start: Optional[str] = None) -> Dict[str
     return {"weekStart": monday.isoformat(), "weekEnd": (monday + timedelta(days=6)).isoformat(), "days": days}
 
 def terms_data(state: AppState) -> List[Dict[str, str]]:
+    """Список учебных периодов для UI. Только до текущего включительно.
+
+    Важно:
+    - СГО отдаёт и будущие триместры (2, 3), но для них отчёт StudentTotal
+      не строится (queue возвращает taskId=-1). UI не должен их показывать,
+      иначе пользователь видит данные текущего триместра под видом «2 триместр».
+    - «-1 — Произвольный интервал» тоже убираем: это не период, а спец-опция.
+    - Сразу после логина СГО иногда возвращает пустой filterSources — делаем
+      один retry через 500 мс.
+    """
     with state.lock:
         state.connect()
+
+        sources: List[Dict[str, Any]] = []
         try:
-            info = state.client.get("reports/StudentTotal")
-            sources = info.get("filterSources") or []
-            for src in sources:
-                if src.get("filterId") == "TERMID":
-                    items = src.get("items") or []
-                    if items: return [{"id": str(i.get("value")), "name": str(i.get("title"))} for i in items if i.get("value")]
-        except Exception: pass
+            sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
+        except Exception:
+            sources = []
+
+        if not sources:
+            time.sleep(0.5)
+            try:
+                sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
+            except Exception:
+                sources = []
+
+        all_terms: List[Dict[str, str]] = []
+        for src in sources:
+            if src.get("filterId") != "TERMID":
+                continue
+            for item in src.get("items") or []:
+                value = str(item.get("value") or "").strip()
+                if not value or value == "-1":
+                    continue
+                all_terms.append({"id": value, "name": str(item.get("title") or "")})
+            break
+
+        # Текущий триместр из дашборда
+        current_id = ""
+        current_name = ""
         try:
             dash = dashboard_data(state)
-            if dash.get("termId"): return [{"id": str(dash["termId"]), "name": dash.get("termName") or "Текущий период"}]
-        except Exception: pass
+            current_id = str(dash.get("termId") or "")
+            current_name = str(dash.get("termName") or "")
+        except Exception:
+            pass
+
+        if all_terms:
+            if current_id:
+                cutoff = -1
+                for i, t in enumerate(all_terms):
+                    if t["id"] == current_id:
+                        cutoff = i
+                        break
+                if cutoff >= 0:
+                    return all_terms[: cutoff + 1]
+            return all_terms
+
+        if current_id:
+            return [{"id": current_id, "name": current_name or "Текущий период"}]
         return []
 
 def _subject_key(name: Any) -> str:
@@ -442,6 +510,8 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
     with state.lock:
         state.connect()
         dash = dashboard_data(state)
+        current_term_id = str(dash.get("termId") or "")
+
         overrides = {}
         if term_id: overrides["TERMID"] = term_id
         try:
@@ -517,11 +587,17 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
         except Exception as e:
             traceback.print_exc()
             print(f"! grades_data({term_id=}) failed: {e}", file=sys.stderr)
+            # Та же защита, что в results_by_term_data: для не текущего периода
+            # не подставляем дашборд (он всегда про текущий триместр).
+            is_future = bool(term_id and current_term_id and term_id != current_term_id)
             return {
                 "subjects": [], "average": None, "marksCount": 0, "counts": {},
                 "attendance": {"items": [], "counts": {}, "total": 0},
-                "asOf": "", "term": dash.get("termName") or "",
-                "error": f"Не удалось получить оценки за выбранный период: {e}",
+                "asOf": "", "term": "" if is_future else (dash.get("termName") or ""),
+                "error": (
+                    f"Оценки за выбранный период недоступны. "
+                    f"Скорее всего, этот триместр ещё не начался. ({e})"
+                ) if is_future else f"Не удалось получить оценки за выбранный период: {e}",
                 "requestedTermId": term_id,
             }
 
@@ -555,12 +631,9 @@ class ApiHandler(BaseHTTPRequestHandler):
     server_version = "SgoDiary/2.0"
     state: AppState
 
-    # Ограничение на тело запроса: защита от мусора и «зависших» соединений.
     MAX_BODY = 1 * 1024 * 1024
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # В сборке --windowed sys.stdout/sys.stderr могут быть None.
-        # Без этой проверки падает КАЖДЫЙ ответ (send_response -> log_request).
         try:
             stream = sys.stdout or sys.stderr
             if stream is None:
@@ -586,7 +659,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path); path = parsed.path; query = parse_qs(parsed.query)
         try:
             if path == "/api/check_auth":
-                # После перезапуска клиента ещё нет: пробуем тихо войти по сохранённому конфигу.
                 with self.state.lock:
                     if self.state.client is None and self.state.config.get("login") and self.state.config.get("password"):
                         try:
@@ -634,18 +706,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None: self.do_GET()
 
-    # --- POST: чтение тела и маршрутизация ---------------------------------
-
     @staticmethod
     def _normalize_path(raw: str) -> str:
-        """'/api/login/', '/api/login?x=1' и абсолютный URL -> '/api/login'."""
         path = urlparse(raw or "").path or "/"
         if len(path) > 1:
             path = path.rstrip("/")
         return path or "/"
 
     def _read_body(self) -> bytes:
-        """Читает тело запроса целиком: поддерживает Content-Length и chunked."""
         transfer = (self.headers.get("Transfer-Encoding") or "").lower()
         if "chunked" in transfer:
             chunks: List[bytes] = []
@@ -659,7 +727,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     break
                 if size == 0:
-                    while True:  # дочитываем трейлеры
+                    while True:
                         trailer = self.rfile.readline(65536)
                         if trailer in (b"\r\n", b"\n", b""):
                             break
@@ -668,7 +736,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if total > self.MAX_BODY:
                     raise ValueError("Слишком большой запрос")
                 chunks.append(self.rfile.read(size))
-                self.rfile.read(2)  # CRLF после чанка
+                self.rfile.read(2)
             return b"".join(chunks)
 
         try:
@@ -689,7 +757,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         return data
 
     def _read_payload(self) -> Dict[str, Any]:
-        """Тело запроса -> dict. Понимает JSON и form-urlencoded, UTF-8 и cp1251."""
         raw = self._read_body()
         if not raw:
             return {}
@@ -715,13 +782,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             data = json.loads(text)
         except ValueError:
-            if "=" in text:  # форма без корректного Content-Type
+            if "=" in text:
                 return {key: values[0] for key, values in parse_qs(text, keep_blank_values=True).items()}
             raise ValueError("Тело запроса не является корректным JSON")
         return data if isinstance(data, dict) else {}
 
     def do_OPTIONS(self) -> None:
-        """Preflight для режима разработки (страница на другом порту)."""
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -733,8 +799,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             self._dispatch_post()
         except (BrokenPipeError, ConnectionResetError):
-            pass  # окно закрыли / браузер оборвал соединение
-        except Exception as exc:  # последняя линия обороны: всегда отвечаем JSON
+            pass
+        except Exception as exc:
             traceback.print_exc()
             try:
                 self._error(str(exc), 500)
@@ -758,7 +824,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "authenticated": self.state.client is not None})
             return
 
-        self._read_body_silent()  # дочитываем тело, иначе браузер получит reset
+        self._read_body_silent()
         self._error(f"Неизвестный запрос: POST {path}", 404)
 
     def _read_body_silent(self) -> None:
@@ -778,7 +844,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         password = data.get("pass")
         if password is None:
             password = data.get("password")
-        password = "" if password is None else str(password)  # пароль НЕ trim'аем
+        password = "" if password is None else str(password)
         school = str(
             data.get("school") or data.get("school_id") or data.get("scid") or ""
         ).strip()
@@ -792,7 +858,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             client = core.SgoClient(url)
             client.login(login, password, school)
         except Exception as exc:
-            # Сообщение SgoError уже человекочитаемое («Не удалось войти: ...»).
             self.log_message("login failed for %s: %s", login, exc)
             self._send_json(
                 {"ok": False, "error": str(exc) or "Ошибка входа",
@@ -801,7 +866,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Сохраняем уже разрешённый числовой id школы, чтобы автовход был быстрее.
         school_id = school
         credentials = getattr(client, "_credentials", None)
         if credentials and len(credentials) >= 3:
