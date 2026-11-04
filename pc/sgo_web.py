@@ -69,7 +69,7 @@ class AppState:
         if self.client is not None: return
         login = str(self.config.get("login") or "")
         password = str(self.config.get("password") or "")
-        if not login or not password: 
+        if not login or not password:
             raise RuntimeError("Не авторизован")
         url = str(self.config.get("url") or core.DEFAULT_URL)
         school = str(self.config.get("school_id") or self.config.get("school") or "")
@@ -205,10 +205,22 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                 return parse_student_total(html)
             parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
         except Exception as exc:
+<<<<<<< Updated upstream
             # Не удалось получить отчёт — отдаём средние с дашборда (текущий период).
             data = results_data(dash)
             data["error"] = str(exc)
             return data
+=======
+            # Пробрасываем ошибку явно: иначе пользователь видит одинаковые данные
+            # дашборда (текущий триместр) на всех вкладках и не понимает, в чём дело.
+            traceback.print_exc()
+            print(f"! StudentTotal ({term_id=}) failed: {exc}", file=sys.stderr)
+            data = results_data(dash)
+            data["error"] = f"Не удалось получить отчёт за выбранный период: {exc}"
+            data["requestedTermId"] = term_id
+            return data
+
+>>>>>>> Stashed changes
         label = dash.get("termName") or ""
         if term_id:
             try:
@@ -219,7 +231,26 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                                 label = str(item.get("title") or "")
             except Exception:
                 pass
+<<<<<<< Updated upstream
         return _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
+=======
+
+        result = _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
+
+        # Проверяем, что сервер действительно вернул запрошенный период.
+        if term_id and result.get("term") and str(result["term"]).strip() != str(label).strip():
+            print(
+                f"! StudentTotal: запрошен термин {term_id!r} ({label!r}), "
+                f"а отчёт вернул {result['term']!r}. Возможно, фильтр не применился.",
+                file=sys.stderr,
+            )
+            result["warning"] = (
+                f"Сервер вернул отчёт за «{result['term']}», "
+                f"хотя запрошен «{label}». Возможно, этот период не поддерживается."
+            )
+        result["requestedTermId"] = term_id
+        return result
+>>>>>>> Stashed changes
 
 def lessons_for(state: AppState, day: date) -> List[Dict[str, Any]]:
     monday = day - timedelta(days=day.weekday())
@@ -263,7 +294,7 @@ def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, A
     with state.lock:
         state.connect()
         diary = state.client.diary(monday)
-        
+
     days = []
     for day in diary.get("weekDays") or []:
         day_date = _as_date(day.get("date"))
@@ -495,7 +526,15 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
                 "asOf": parsed.get("as_of") or "", "term": parsed.get("term") or dash.get("termName") or "",
             }
         except Exception as e:
-            return {"subjects": [], "average": None, "marksCount": 0, "counts": {}, "attendance": {"items": [], "counts": {}, "total": 0}, "asOf": "", "term": dash.get("termName") or "", "error": str(e)}
+            traceback.print_exc()
+            print(f"! grades_data({term_id=}) failed: {e}", file=sys.stderr)
+            return {
+                "subjects": [], "average": None, "marksCount": 0, "counts": {},
+                "attendance": {"items": [], "counts": {}, "total": 0},
+                "asOf": "", "term": dash.get("termName") or "",
+                "error": f"Не удалось получить оценки за выбранный период: {e}",
+                "requestedTermId": term_id,
+            }
 
 def assignment_details(state: AppState, assignment_id: int) -> Dict[str, Any]:
     with state.lock:

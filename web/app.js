@@ -391,6 +391,8 @@ function bindTermSelectors() {
       localStorage.setItem("sgo.term", el.value);
       syncTermSelectors(el);
       state.grades = null;
+      state.results = null;          // ← сбрасываем старый результат
+      state.resultsPromise = null;   // ← и старый промис
       loadGrades(true);
       if (sel === "#term-select-results" || sel === "#term-select") loadResults(true);
     });
@@ -410,6 +412,18 @@ function resultsParams() {
 function loadResults(force) {
   const list = document.querySelector("#results-list");
   if (!list) return Promise.resolve(null);
+<<<<<<< Updated upstream
+=======
+
+  // При смене терма/режима (force=true) обязательно сбрасываем старые
+  // данные и промис — иначе при ошибке/пустом ответе пользователь видит
+  // прошлый триместр и думает, что ничего не поменялось.
+  if (force) {
+    state.resultsPromise = null;
+    state.results = null;
+  }
+
+>>>>>>> Stashed changes
   if (state.resultsPromise && !force) return state.resultsPromise;
   if (!state.results) {
     list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;

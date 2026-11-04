@@ -16,9 +16,14 @@ export function renderGrades(data) {
 
   const subjects = (data.subjects || []).filter((s) => s.marks.length);
   const list = document.querySelector("#grades-list");
-  
+
+  const errText = data.error || "";
+  const errHtml = errText
+    ? `<div class="banner" style="margin-bottom:12px;">${escapeHtml(errText)}</div>`
+    : "";
+
   if (!subjects.length) {
-    list.innerHTML = `<div class="empty"><strong>Оценок пока нет</strong>За период ничего не выставлено.</div>`;
+    list.innerHTML = errHtml + `<div class="empty"><strong>Оценок пока нет</strong>За период ничего не выставлено.</div>`;
     return;
   }
 
@@ -40,7 +45,7 @@ export function renderGrades(data) {
   if (dots.length > 0) {
     // Сортируем точки по дате (сначала новые)
     dots.sort((a, b) => (a.date < b.date ? 1 : -1));
-    
+
     dotsHtml = `
       <div class="calc-card" style="border-color: var(--red); background: #fff5f5; margin-bottom: 20px;">
         <div class="calc-title" style="color: var(--red); border-bottom-color: #fde8e7;">
@@ -62,7 +67,7 @@ export function renderGrades(data) {
     `;
   }
 
-  list.innerHTML = dotsHtml + `<div class="summary">${summary.join("")}</div>` +
+  list.innerHTML = errHtml + dotsHtml + `<div class="summary">${summary.join("")}</div>` +
     subjects.map((subj) => {
       const marksHtml = subj.marks.map((m) => {
         const w = m.weight > 1 ? `<span class="weight-badge">x${m.weight}</span>` : "";
@@ -103,30 +108,127 @@ export function renderResults(results) {
       : `Рейтинг предметов по среднему баллу${period}`;
   }
 
+<<<<<<< Updated upstream
+=======
+  // Сообщение об ошибке/предупреждении от бэкенда — показываем всегда сверху.
+  const errText = results.error || results.warning || "";
+  const errHtml = errText
+    ? `<div class="banner" style="margin-bottom:12px;">${escapeHtml(errText)}</div>`
+    : "";
+
+>>>>>>> Stashed changes
   if (!subjects.length) {
     const hint = mode === "year"
       ? "Годовые оценки ещё не выставлены — выберите триместр или дождитесь конца учебного года."
       : "Средние баллы не рассчитаны.";
+<<<<<<< Updated upstream
     list.innerHTML = `<div class="empty"><strong>Пока пусто</strong>${hint}</div>`;
+=======
+    list.innerHTML = errHtml + `<div class="empty"><strong>Пока пусто</strong>${hint}</div>`;
+>>>>>>> Stashed changes
     return;
   }
 
   // Сортируем по убыванию балла
   subjects.sort((a, b) => b.average - a.average);
 
+<<<<<<< Updated upstream
   const common = results.common != null
     ? `<div class="summary">
          <span class="chip">${mode === "year" ? "Средняя годовая оценка" : "Общий средний балл"} <b>${String(results.common).replace(".", ",")}</b></span>
          <span class="chip">Предметов <b>${subjects.length}</b></span>
        </div>`
     : "";
+=======
+  // --- Вспомогательные ---
+  const clampMark = (v) => Math.max(2, Math.min(5, Math.round(v)));
+  const fmt = (v) => String(v).replace(".", ",").slice(0, 4);
+>>>>>>> Stashed changes
 
-  list.innerHTML = common + subjects.map((s, index) => {
-    let medal = "";
-    if (index === 0) medal = `<span class="rank-badge rank-1">1</span>`;
-    else if (index === 1) medal = `<span class="rank-badge rank-2">2</span>`;
-    else if (index === 2) medal = `<span class="rank-badge rank-3">3</span>`;
-    else medal = `<span class="rank-badge" style="background:var(--green-100); color:var(--green-800);">${index + 1}</span>`;
+  // Распределение по округлённым отметкам
+  const distribution = { 5: 0, 4: 0, 3: 0, 2: 0 };
+  subjects.forEach((s) => distribution[clampMark(s.average)]++);
+
+  // Общий средний балл
+  let commonAvg = results.common != null ? parseFloat(results.common) : NaN;
+  if (isNaN(commonAvg)) {
+    commonAvg = subjects.reduce((sum, s) => sum + s.average, 0) / subjects.length;
+  }
+
+  // Цвет и подпись для общего балла
+  let avgColor = "#10b981";
+  let avgLabel = "Отлично!";
+  if (commonAvg < 4.5) { avgColor = "#3b82f6"; avgLabel = "Хорошо"; }
+  if (commonAvg < 3.5) { avgColor = "#f59e0b"; avgLabel = "Средне"; }
+  if (commonAvg < 2.5) { avgColor = "#ef4444"; avgLabel = "Слабо"; }
+
+  // Круговой индикатор: диапазон 2..5 → 0..100%
+  const r = 42;
+  const C = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(1, (commonAvg - 2) / 3));
+  const dashOffset = (C * (1 - pct)).toFixed(2);
+
+  const summaryHtml = `
+    <div class="results-summary">
+      <div class="results-circle-wrap">
+        <svg class="results-circle" viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="results-circle-bg" cx="50" cy="50" r="${r}"
+                  fill="none" stroke-width="10"/>
+          <circle class="results-circle-fill" cx="50" cy="50" r="${r}"
+                  fill="none" stroke-width="10"
+                  stroke-linecap="round"
+                  stroke-dasharray="${C.toFixed(2)}"
+                  stroke-dashoffset="${dashOffset}"
+                  transform="rotate(-90 50 50)"
+                  style="stroke:${avgColor}"/>
+        </svg>
+        <div class="results-circle-inner">
+          <div class="results-circle-value" style="color:${avgColor}">${fmt(commonAvg)}</div>
+          <div class="results-circle-label">${avgLabel}</div>
+        </div>
+      </div>
+      <div class="results-stats">
+        <div class="results-stat">
+          <span class="results-stat-value">${subjects.length}</span>
+          <span class="results-stat-label">Предметов</span>
+        </div>
+        <div class="results-stat results-stat-good">
+          <span class="results-stat-value">${distribution[5]}</span>
+          <span class="results-stat-label">«5»</span>
+        </div>
+        <div class="results-stat results-stat-ok">
+          <span class="results-stat-value">${distribution[4]}</span>
+          <span class="results-stat-label">«4»</span>
+        </div>
+        <div class="results-stat results-stat-warn">
+          <span class="results-stat-value">${distribution[3]}</span>
+          <span class="results-stat-label">«3»</span>
+        </div>
+        ${distribution[2] > 0 ? `
+          <div class="results-stat results-stat-bad">
+            <span class="results-stat-value">${distribution[2]}</span>
+            <span class="results-stat-label">«2»</span>
+          </div>` : ""}
+      </div>
+    </div>
+  `;
+
+  const rows = subjects.map((s, index) => {
+    const pctBar = Math.max(0, Math.min(100, (s.average / 5) * 100)).toFixed(1);
+    const level = clampMark(s.average);
+
+    let medal;
+    if (index === 0) medal = `<span class="result-medal">🥇</span>`;
+    else if (index === 1) medal = `<span class="result-medal">🥈</span>`;
+    else if (index === 2) medal = `<span class="result-medal">🥉</span>`;
+    else medal = `<span class="result-medal result-medal-num">${index + 1}</span>`;
+
+    let extra = "";
+    if (mode === "current" && s.final != null) {
+      extra = `<span class="result-note">годовая ${fmt(s.final)}</span>`;
+    } else if (mode === "current" && s.marksCount) {
+      extra = `<span class="result-note">${s.marksCount} оц.</span>`;
+    }
 
     // В режиме «триместр» показываем подсказку с годовой, если она уже есть.
     let extra = "";
@@ -137,13 +239,41 @@ export function renderResults(results) {
     }
 
     return `
+<<<<<<< Updated upstream
       <div class="result-row">
         <span class="name" style="display:flex; align-items:center;">
           ${medal} ${escapeHtml(s.name)}
         </span>
         <span class="value">${extra}${String(s.average).replace(".", ",")}</span>
       </div>`;
+=======
+      <div class="result-card">
+        ${medal}
+        <div class="result-main">
+          <div class="result-name-row">
+            <span class="result-name">${escapeHtml(s.name)}</span>
+            <span class="result-score">${fmt(s.average)}</span>
+          </div>
+          <div class="result-bar">
+            <div class="result-bar-fill level-${level}"
+                 data-target="${pctBar}%" style="width:0%"></div>
+          </div>
+          ${extra ? `<div class="result-extra">${extra}</div>` : ""}
+        </div>
+      </div>
+    `;
+>>>>>>> Stashed changes
   }).join("");
+
+  list.innerHTML = errHtml + summaryHtml + `<div class="results-grid">${rows}</div>`;
+
+  // Плавное заполнение полосок с лёгкой задержкой
+  requestAnimationFrame(() => {
+    list.querySelectorAll(".result-bar-fill").forEach((el, i) => {
+      const target = el.dataset.target;
+      setTimeout(() => { el.style.width = target; }, 80 + Math.min(i, 15) * 45);
+    });
+  });
 }
 
 export function renderAttendance(data) {

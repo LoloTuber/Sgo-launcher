@@ -171,9 +171,15 @@ class ReportService:
         return result
 
     def generate_html(self, report_id: str, overrides: Optional[Dict[str, str]] = None, timeout: float = 120.0) -> str:
+        overrides = overrides or {}
+        # ВАЖНО: TERMID уходит и в selectedData, и в params — часть конфигураций
+        # СГО читает его из params, часть — из selectedData. Дубль безопасен.
         task = self.client.request(
             "POST", f"reports/{report_id}/queue",
-            json={"selectedData": self.selected_data(report_id, overrides), "params": self.params()},
+            json={
+                "selectedData": self.selected_data(report_id, overrides),
+                "params": self.params(overrides),
+            },
         ).json()
         task_id = task.get("taskId")
         if task_id is None:
