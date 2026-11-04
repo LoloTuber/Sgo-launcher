@@ -1,0 +1,16 @@
+export const state = {
+  quick: null,
+  grades: null,
+  diary: null,
+  schedule: null,
+  quickPromise: null,
+  gradesPromise: null,
+  diaryPromise: null,
+  schedulePromise: null,
+  tab: "homework",
+  currentWeek: null,
+  scheduleWeek: null,
+  calcWeight: 10,
+  simMarkId: null,
+  isShortDay: false,
+};

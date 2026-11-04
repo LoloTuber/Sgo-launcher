@@ -1,0 +1,31 @@
+# --- Секретные данные ---
+sgo_config.json
+*.keystore
+*.jks
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+build/
+dist/
+*.spec
+
+# --- Android / Kotlin ---
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.aab
+
+# --- System ---
+Thumbs.db
