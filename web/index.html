@@ -94,6 +94,13 @@
   <section class="panel" data-panel="results">
     <div class="panel-head">
       <div><h2>Итоги</h2><p class="subtle" id="results-sub">Рейтинг предметов по среднему баллу</p></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <select id="results-mode-select" class="term-select" aria-label="Тип итогов">
+          <option value="current">Средний балл за период</option>
+          <option value="year">Годовая оценка</option>
+        </select>
+        <select id="term-select-results" class="term-select" aria-label="Учебный период"><option value="">Загрузка…</option></select>
+      </div>
     </div>
     <div id="results-list" class="list"></div>
   </section>

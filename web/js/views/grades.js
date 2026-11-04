@@ -89,19 +89,34 @@ export function renderGrades(data) {
 
 export function renderResults(results) {
   const list = document.querySelector("#results-list");
+  if (!list) return;
+
+  const mode = results.mode === "year" ? "year" : "current";
   const subjects = (results.subjects || []).filter((s) => s.average != null);
-  
+
+  // Подпись над списком: выбранный режим и период.
+  const sub = document.querySelector("#results-sub");
+  if (sub) {
+    const period = results.term ? ` · ${escapeHtml(results.term)}` : "";
+    sub.textContent = mode === "year"
+      ? `Годовые отметки${period}`
+      : `Рейтинг предметов по среднему баллу${period}`;
+  }
+
   if (!subjects.length) {
-    list.innerHTML = `<div class="empty"><strong>Пока пусто</strong>Средние баллы не рассчитаны.</div>`;
+    const hint = mode === "year"
+      ? "Годовые оценки ещё не выставлены — выберите триместр или дождитесь конца учебного года."
+      : "Средние баллы не рассчитаны.";
+    list.innerHTML = `<div class="empty"><strong>Пока пусто</strong>${hint}</div>`;
     return;
   }
 
-  // Сортируем по убыванию среднего балла
+  // Сортируем по убыванию балла
   subjects.sort((a, b) => b.average - a.average);
 
   const common = results.common != null
     ? `<div class="summary">
-         <span class="chip">Общий средний балл <b>${String(results.common).replace(".", ",")}</b></span>
+         <span class="chip">${mode === "year" ? "Средняя годовая оценка" : "Общий средний балл"} <b>${String(results.common).replace(".", ",")}</b></span>
          <span class="chip">Предметов <b>${subjects.length}</b></span>
        </div>`
     : "";
@@ -113,12 +128,20 @@ export function renderResults(results) {
     else if (index === 2) medal = `<span class="rank-badge rank-3">3</span>`;
     else medal = `<span class="rank-badge" style="background:var(--green-100); color:var(--green-800);">${index + 1}</span>`;
 
+    // В режиме «триместр» показываем подсказку с годовой, если она уже есть.
+    let extra = "";
+    if (mode === "current" && s.final != null) {
+      extra = `<small class="result-note">годовая ${String(s.final).replace(".", ",")}</small>`;
+    } else if (mode === "current" && s.marksCount) {
+      extra = `<small class="result-note">${s.marksCount} оц.</small>`;
+    }
+
     return `
       <div class="result-row">
         <span class="name" style="display:flex; align-items:center;">
           ${medal} ${escapeHtml(s.name)}
         </span>
-        <span class="value">${String(s.average).replace(".", ",")}</span>
+        <span class="value">${extra}${String(s.average).replace(".", ",")}</span>
       </div>`;
   }).join("");
 }

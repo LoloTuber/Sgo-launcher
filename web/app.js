@@ -151,6 +151,7 @@ function initSettings() {
 
         state.quick = null;
         state.grades = null;
+        state.results = null;
         state.diary = null;
         state.schedule = null;
         localStorage.removeItem("sgo.term");
@@ -285,11 +286,13 @@ function refreshAll() {
   btn.classList.add("is-busy");
   document.querySelector("#banner").hidden = true;
   state.grades = null;
+  state.results = null;
 
   api.postRefresh()
     .then(() => Promise.allSettled([
       loadQuick(true),
       loadGrades(true),
+      loadResults(true),
       loadDiary(state.currentWeek),
       loadSchedule(state.scheduleWeek)
     ]))
@@ -347,12 +350,14 @@ async function copyHomework() {
 }
 
 // --- Вкладки и Термины ---
+const TERM_SELECTORS = ["#term-select", "#term-select-att", "#term-select-results"];
+
 async function loadTerms() {
   try {
     const data = await api.fetchJson("/api/terms");
     const terms = data.terms || [];
     const saved = localStorage.getItem("sgo.term") || "";
-    for (const sel of ["#term-select", "#term-select-att"]) {
+    for (const sel of TERM_SELECTORS) {
       const el = document.querySelector(sel);
       if (!el) continue;
       el.innerHTML = "";
@@ -371,13 +376,15 @@ async function loadTerms() {
 }
 
 function syncTermSelectors(source) {
-  const other = source.id === "term-select" ? "#term-select-att" : "#term-select";
-  const target = document.querySelector(other);
-  if (target && target.value !== source.value) target.value = source.value;
+  for (const sel of TERM_SELECTORS) {
+    if (sel === `#${source.id}`) continue;
+    const target = document.querySelector(sel);
+    if (target && target.value !== source.value) target.value = source.value;
+  }
 }
 
 function bindTermSelectors() {
-  for (const sel of ["#term-select", "#term-select-att"]) {
+  for (const sel of TERM_SELECTORS) {
     const el = document.querySelector(sel);
     if (!el) continue;
     el.addEventListener("change", () => {
@@ -385,8 +392,73 @@ function bindTermSelectors() {
       syncTermSelectors(el);
       state.grades = null;
       loadGrades(true);
+      if (sel === "#term-select-results" || sel === "#term-select") loadResults(true);
     });
   }
+}
+
+// --- Итоги: выбор триместра или годовая оценка ---
+function resultsParams() {
+  const termEl = document.querySelector("#term-select-results");
+  const modeEl = document.querySelector("#results-mode-select");
+  const mode = modeEl && modeEl.value === "year" ? "year" : "current";
+  // Годовые отметки берутся из отчёта за весь год — период не важен.
+  const term = mode === "year" ? "" : (termEl ? termEl.value : "");
+  return { term, mode };
+}
+
+function loadResults(force) {
+  const list = document.querySelector("#results-list");
+  if (!list) return Promise.resolve(null);
+  if (state.resultsPromise && !force) return state.resultsPromise;
+  if (!state.results) {
+    list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+  }
+  const { term, mode } = resultsParams();
+
+  state.resultsPromise = api.getResults(term, mode)
+    .then((data) => {
+      state.results = data;
+      renderResults(data);
+      return data;
+    })
+    .catch((err) => {
+      if (!state.results) {
+        list.innerHTML = `<div class="empty"><strong>Итоги недоступны</strong>${escapeHtml(err.message)}</div>`;
+      }
+      return null;
+    })
+    .finally(() => { state.resultsPromise = null; });
+  return state.resultsPromise;
+}
+
+function bindResultsControls() {
+  const modeEl = document.querySelector("#results-mode-select");
+  const termEl = document.querySelector("#term-select-results");
+  const savedMode = localStorage.getItem("sgo.resultsMode");
+  if (modeEl && savedMode) modeEl.value = savedMode;
+  applyResultsMode();
+
+  if (modeEl) {
+    modeEl.addEventListener("change", () => {
+      localStorage.setItem("sgo.resultsMode", modeEl.value);
+      applyResultsMode();
+      loadResults(true);
+    });
+  }
+  if (termEl) {
+    termEl.addEventListener("change", applyResultsMode);
+  }
+}
+
+/** В режиме «годовая оценка» выбор триместра не нужен — скрываем его. */
+function applyResultsMode() {
+  const modeEl = document.querySelector("#results-mode-select");
+  const termEl = document.querySelector("#term-select-results");
+  if (!modeEl || !termEl) return;
+  const isYear = modeEl.value === "year";
+  termEl.style.display = isYear ? "none" : "";
+  termEl.setAttribute("aria-hidden", isYear ? "true" : "false");
 }
 
 function selectTab(name) {
@@ -395,6 +467,7 @@ function selectTab(name) {
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("is-active", p.dataset.panel === name));
 
   if (name === "grades" || name === "attendance" || name === "calc") loadGrades();
+  if (name === "results") loadResults();
   if (name === "diary" && !state.diary) loadDiary();
   if (name === "schedule" && !state.schedule) loadSchedule();
   if (name === "schedule") updateScheduleStatus();
@@ -480,7 +553,7 @@ function showLogin() {
       if (res.ok) {
         overlay.hidden = true;
         loadQuick();
-        loadTerms().then(() => loadGrades());
+        loadTerms().then(() => { loadGrades(); loadResults(); });
       } else {
         let msg = res.error || "Ошибка входа";
         if (res.login) {
@@ -521,6 +594,7 @@ function init() {
   document.querySelector("#refresh").addEventListener("click", refreshAll);
   document.querySelector("#copy").addEventListener("click", copyHomework);
   bindTermSelectors();
+  bindResultsControls();
 
   document.querySelector("#diary-prev").addEventListener("click", () => {
     if (!state.currentWeek) return;
@@ -551,7 +625,7 @@ function init() {
   checkAuth().then(isAuth => {
     if (isAuth) {
       loadQuick();
-      loadTerms().then(() => loadGrades());
+      loadTerms().then(() => { loadGrades(); loadResults(); });
     } else {
       showLogin();
     }

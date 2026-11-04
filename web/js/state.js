@@ -1,10 +1,12 @@
 export const state = {
   quick: null,
   grades: null,
+  results: null,
   diary: null,
   schedule: null,
   quickPromise: null,
   gradesPromise: null,
+  resultsPromise: null,
   diaryPromise: null,
   schedulePromise: null,
   tab: "homework",

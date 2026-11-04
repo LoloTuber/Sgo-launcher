@@ -596,6 +596,9 @@ class SgoClient {
         }
 
         val subjectsMap = mutableMapOf<String, MutableList<JSONObject>>()
+        // Итоговые колонки таблицы: «Средний балл» и «Годовая отметка».
+        val averagesMap = mutableMapOf<String, String>()
+        val finalsMap = mutableMapOf<String, String>()
         val absences = JSONArray()
         val absentCounts = mutableMapOf<String, Int>()
         var totalMarks = 0
@@ -651,6 +654,11 @@ class SgoClient {
                     }
                 }
             }
+
+            // Хвост строки после дневных колонок: средний балл и годовая отметка.
+            val tail = cells.drop(dates.size + 1)
+            if (tail.isNotEmpty()) averagesMap[subjectName] = tail[0].text().trim()
+            if (tail.size >= 2) finalsMap[subjectName] = tail[1].text().trim()
         }
 
         val response = JSONObject()
@@ -667,7 +675,13 @@ class SgoClient {
             marks.sortByDescending { it.optString("date") }
             var sum = 0.0; var wSum = 0
             for (m in marks) { val v = m.optDouble("value"); if (v > 0) { sum += v * m.optInt("weight", 1); wSum += m.optInt("weight", 1) } }
-            subjsArr.put(JSONObject().apply { put("name", name); put("marks", JSONArray(marks)); put("average", if (wSum > 0) round2(sum / wSum) else 0.0); put("count", marks.size) })
+            val subjJson = JSONObject().apply {
+                put("name", name); put("marks", JSONArray(marks)); put("average", if (wSum > 0) round2(sum / wSum) else 0.0); put("count", marks.size)
+            }
+            // Колонки отчёта: средний балл за период и годовая отметка — нужны для «Итогов».
+            averagesMap[name]?.toDoubleOrNull()?.let { subjJson.put("reportAverage", round2(it)) }
+            finalsMap[name]?.toDoubleOrNull()?.let { subjJson.put("final", round2(it)) }
+            subjsArr.put(subjJson)
         }
         response.put("subjects", subjsArr)
 
@@ -679,6 +693,95 @@ class SgoClient {
         // Дни периода нужны, чтобы запросить веса из дневника за нужный термин.
         response.put("days", JSONArray(dates))
         return response.toString()
+    }
+
+    /**
+     * Итоги за выбранный учебный период (триместр) или годовые отметки.
+     * mode="year" — последняя колонка отчёта StudentTotal, иначе — средние баллы.
+     */
+    fun getResultsJson(termId: String? = null, mode: String? = null): String {
+        val wantYear = mode == "year"
+        try {
+            val html = getStudentTotalHtml(if (wantYear) null else termId)
+            if (html != null) {
+                val parsed = JSONObject(parseReportHtml(html))
+                if (parsed.optBoolean("ok", false)) {
+                    val subjects = parsed.optJSONArray("subjects") ?: JSONArray()
+                    val list = mutableListOf<JSONObject>()
+                    var weightedSum = 0.0
+                    var weightTotal = 0.0
+                    var hasFinals = false
+                    for (i in 0 until subjects.length()) {
+                        val s = subjects.getJSONObject(i)
+                        val finalValue = if (s.has("final")) s.optDouble("final") else Double.NaN
+                        val reportAvg = if (s.has("reportAverage")) s.optDouble("reportAverage") else Double.NaN
+                        val termAvg = if (!reportAvg.isNaN()) reportAvg else s.optDouble("average")
+                        if (!finalValue.isNaN()) hasFinals = true
+                        val value = if (wantYear) finalValue else termAvg
+                        val entry = JSONObject().apply {
+                            put("name", s.optString("name"))
+                            put("average", if (value.isNaN()) JSONObject.NULL else round2(value))
+                            put("final", if (finalValue.isNaN()) JSONObject.NULL else round2(finalValue))
+                            put("termAverage", if (termAvg.isNaN()) JSONObject.NULL else round2(termAvg))
+                            put("marksCount", s.optInt("count", 0))
+                        }
+                        list.add(entry)
+                        if (!value.isNaN()) {
+                            val weight = if (wantYear) 1.0 else maxOf(s.optInt("count", 0), 1).toDouble()
+                            weightedSum += value * weight
+                            weightTotal += weight
+                        }
+                    }
+                    val response = JSONObject()
+                    response.put("ok", true)
+                    response.put("mode", if (wantYear) "year" else "current")
+                    response.put("term", if (wantYear) "" else parsed.optString("term"))
+                    response.put("asOf", parsed.optString("asOf"))
+                    response.put("finalAvailable", hasFinals)
+                    response.put("common", if (weightTotal > 0.0) round2(weightedSum / weightTotal) else JSONObject.NULL)
+                    val arr = JSONArray()
+                    list.forEach { arr.put(it) }
+                    response.put("subjects", arr)
+                    response.put("updated", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date()))
+                    return response.toString()
+                }
+            }
+        } catch (e: AuthExpiredException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("SGO", "Не удалось получить итоги из отчёта", e)
+        }
+
+        // Фолбэк: средние баллы текущего периода с дашборда.
+        try {
+            val dash = get("student-diary/dashboard", mapOf("studentId" to studentId!!, "version" to "2"))
+            val avgMarks = dash.optJSONObject("averageMarks")
+            val subjs = JSONArray()
+            val subjArr = avgMarks?.optJSONArray("subjectAverageMarks")
+            if (subjArr != null) {
+                for (i in 0 until subjArr.length()) {
+                    val s = subjArr.getJSONObject(i)
+                    subjs.put(JSONObject().apply {
+                        put("name", s.optString("subjectName"))
+                        put("average", round2(s.optDouble("averageMark")))
+                        put("final", JSONObject.NULL)
+                        put("marksCount", 0)
+                    })
+                }
+            }
+            return JSONObject()
+                .put("ok", true)
+                .put("mode", if (wantYear) "year" else "current")
+                .put("term", termName)
+                .put("finalAvailable", false)
+                .put("common", round2(avgMarks?.optDouble("commonAverageMark") ?: 0.0))
+                .put("subjects", subjs)
+                .toString()
+        } catch (e: AuthExpiredException) {
+            throw e
+        } catch (e: Exception) {
+            return JSONObject().put("ok", false).put("error", "Не удалось получить итоги: ${e.message}").toString()
+        }
     }
 
     // --- Веса оценок -------------------------------------------------------

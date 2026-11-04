@@ -129,7 +129,97 @@ def results_data(dashboard: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(item, dict):
             subjects.append({"name": item.get("subjectName") or "", "average": item.get("averageMark")})
     subjects.sort(key=lambda item: item["name"])
-    return {"common": averages.get("commonAverageMark"), "subjects": subjects}
+    return {
+        "common": averages.get("commonAverageMark"),
+        "subjects": subjects,
+        "term": dashboard.get("termName") or "",
+        "mode": "current",
+        "finalAvailable": False,
+    }
+
+
+def _parse_average(value: Any) -> Optional[float]:
+    """'4,35' / '4.35' / 4.35 -> float; пустое или нечисловое -> None."""
+    text = str(value or "").strip().replace(",", ".")
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return round(number, 2)
+
+
+def _results_from_parsed(parsed: Dict[str, Any], term_label: str, mode: str) -> Dict[str, Any]:
+    """Собирает список «Итогов» из распарсенного отчёта StudentTotal.
+
+    mode="year" — годовые отметки (последняя колонка таблицы);
+    mode="current" — средние баллы за выбранный триместр/период.
+    """
+    subjects = []
+    weighted_sum = 0.0
+    weight_total = 0.0
+    finals_present = 0
+    for item in parsed.get("subjects") or []:
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        final_value = _parse_average(item.get("final"))
+        average_value = _parse_average(item.get("average"))
+        marks_count = len([m for m in item.get("marks") or [] if _parse_average(m.get("value")) is not None])
+        if final_value is not None:
+            finals_present += 1
+        value = final_value if mode == "year" else average_value
+        subjects.append({
+            "name": name,
+            "average": value,
+            "final": final_value,
+            "termAverage": average_value,
+            "marksCount": marks_count,
+        })
+        if value is not None:
+            weight = marks_count if mode == "current" else 1
+            weighted_sum += value * weight
+            weight_total += weight
+    subjects.sort(key=lambda item: item["name"])
+    common = round(weighted_sum / weight_total, 2) if weight_total else None
+    return {
+        "common": common,
+        "subjects": subjects,
+        "term": parsed.get("term") or term_label or "",
+        "mode": mode,
+        "finalAvailable": finals_present > 0,
+        "asOf": parsed.get("as_of") or "",
+    }
+
+
+def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "current") -> Dict[str, Any]:
+    """Итоги за выбранный учебный период (триместр) или годовые отметки."""
+    with state.lock:
+        state.connect()
+        dash = dashboard_data(state)
+        overrides = {}
+        if term_id:
+            overrides["TERMID"] = term_id
+        try:
+            def producer():
+                html = state.reports.generate_html("StudentTotal", overrides)
+                return parse_student_total(html)
+            parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
+        except Exception as exc:
+            # Не удалось получить отчёт — отдаём средние с дашборда (текущий период).
+            data = results_data(dash)
+            data["error"] = str(exc)
+            return data
+        label = dash.get("termName") or ""
+        if term_id:
+            try:
+                for src in state.reports.info("StudentTotal").get("filterSources") or []:
+                    if src.get("filterId") == "TERMID":
+                        for item in src.get("items") or []:
+                            if str(item.get("value")) == str(term_id):
+                                label = str(item.get("title") or "")
+            except Exception:
+                pass
+        return _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
 
 def lessons_for(state: AppState, day: date) -> List[Dict[str, Any]]:
     monday = day - timedelta(days=day.weekday())
@@ -480,6 +570,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif path == "/api/grades":
                 term_id = (query.get("term") or [None])[0]
                 self._handle_grades(term_id)
+            elif path == "/api/results":
+                term_id = (query.get("term") or [None])[0]
+                mode = (query.get("mode") or ["current"])[0]
+                try:
+                    data = results_by_term_data(self.state, term_id, "year" if mode == "year" else "current")
+                except (ReportError, core.SgoError) as exc:
+                    self._send_json({"ok": False, "error": f"Не удалось получить итоги: {exc}"}, 502)
+                    return
+                self._send_json({"ok": True, "updated": datetime.now().isoformat(timespec="seconds"), **data})
             elif path == "/api/diary":
                 week = (query.get("week") or [None])[0]
                 self._send_json({"ok": True, **diary_data(self.state, week)})
