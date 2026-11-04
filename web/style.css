@@ -515,7 +515,8 @@ body.dark-theme .mark-value.m1, body.dark-theme .marks .m1, body.dark-theme .mar
 body.dark-theme .mark-value.m0, body.dark-theme .marks .m0, body.dark-theme .mark-chip.m0 { background: #3b0764 !important; color: #c084fc !important; border-color: #9333ea !important; border-style: dashed !important; }
 
 /* =========================================
-   ЦВЕТОВЫЕ ТЕМЫ (синяя, розовая, фиолетовая, оранжевая)
+   ЦВЕТОВЫЕ ТЕМЫ (синяя, розовая, фиолетовая, оранжевая,
+   красная, бирюзовая, голубая, графитовая)
    Светлые варианты — переопределяют переменные --green-*
    Тёмные варианты — вместе с body.dark-theme
    ========================================= */
@@ -611,3 +612,94 @@ body.dark-theme.theme-orange {
   --green-900: #ffedd5;
 }
 body.dark-theme.theme-orange .topbar { background: linear-gradient(135deg, #150800, #7c2d12); }
+/* --- 🔴 Красная --- */
+body.theme-red {
+  --green-900: #450a0a;
+  --green-800: #7f1d1d;
+  --green-700: #b91c1c;
+  --green-600: #dc2626;
+  --green-500: #ef4444;
+  --green-200: #fecaca;
+  --green-100: #fee2e2;
+  --green-50: #fef2f2;
+}
+body.dark-theme.theme-red {
+  --green-50: #1a0404;
+  --green-100: #2e0f0f;
+  --green-200: #7f1d1d;
+  --green-500: #ef4444;
+  --green-600: #dc2626;
+  --green-700: #f87171;
+  --green-800: #fca5a5;
+  --green-900: #fee2e2;
+}
+body.dark-theme.theme-red .topbar { background: linear-gradient(135deg, #1a0404, #7f1d1d); }
+
+/* --- 🌊 Бирюзовая (teal) --- */
+body.theme-teal {
+  --green-900: #042f2e;
+  --green-800: #115e59;
+  --green-700: #0f766e;
+  --green-600: #0d9488;
+  --green-500: #14b8a6;
+  --green-200: #99f6e4;
+  --green-100: #ccfbf1;
+  --green-50: #f0fdfa;
+}
+body.dark-theme.theme-teal {
+  --green-50: #021a19;
+  --green-100: #0f2e2b;
+  --green-200: #115e59;
+  --green-500: #14b8a6;
+  --green-600: #0d9488;
+  --green-700: #2dd4bf;
+  --green-800: #5eead4;
+  --green-900: #ccfbf1;
+}
+body.dark-theme.theme-teal .topbar { background: linear-gradient(135deg, #021a19, #115e59); }
+
+/* --- 💧 Голубая (cyan) --- */
+body.theme-cyan {
+  --green-900: #083344;
+  --green-800: #155e75;
+  --green-700: #0e7490;
+  --green-600: #0891b2;
+  --green-500: #06b6d4;
+  --green-200: #a5f3fc;
+  --green-100: #cffafe;
+  --green-50: #ecfeff;
+}
+body.dark-theme.theme-cyan {
+  --green-50: #021a22;
+  --green-100: #0c2b36;
+  --green-200: #155e75;
+  --green-500: #06b6d4;
+  --green-600: #0891b2;
+  --green-700: #22d3ee;
+  --green-800: #67e8f9;
+  --green-900: #cffafe;
+}
+body.dark-theme.theme-cyan .topbar { background: linear-gradient(135deg, #021a22, #155e75); }
+
+/* --- ⚫ Графитовая (slate) --- */
+body.theme-slate {
+  --green-900: #0f172a;
+  --green-800: #1e293b;
+  --green-700: #334155;
+  --green-600: #475569;
+  --green-500: #64748b;
+  --green-200: #cbd5e1;
+  --green-100: #e2e8f0;
+  --green-50: #f8fafc;
+}
+body.dark-theme.theme-slate {
+  --green-50: #0b1120;
+  --green-100: #1e293b;
+  --green-200: #334155;
+  --green-500: #64748b;
+  --green-600: #475569;
+  --green-700: #94a3b8;
+  --green-800: #cbd5e1;
+  --green-900: #e2e8f0;
+}
+body.dark-theme.theme-slate .topbar { background: linear-gradient(135deg, #0b1120, #334155); }

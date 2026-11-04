@@ -46,7 +46,7 @@ async function storageSet(key, value) {
 }
 
 // --- Тема ---
-const COLOR_THEMES = ["blue", "pink", "purple", "orange"];
+const COLOR_THEMES = ["blue", "pink", "purple", "orange", "red", "teal", "cyan", "slate"];
 
 function applyColorTheme(theme) {
   document.body.classList.remove(...COLOR_THEMES.map(t => `theme-${t}`));
