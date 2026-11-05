@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mock SGO</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">СГ</div>
+    <div class="brand-text"><h1>Дневник</h1><p id="who">Загружаю…</p></div>
+  </div>
+  <div class="head-stats">
+    <div class="stat vac-stat" id="vac-box" hidden title=""><span id="vac-days">—</span><small id="vac-label">до каникул</small></div>
+    <div class="stat" id="avg-box" hidden><span id="avg">—</span><small>средний балл</small></div>
+    <button id="theme-toggle" class="icon-btn" type="button" title="Сменить тему"><span id="theme-icon">🌙</span></button>
+    <button id="settings-btn" class="icon-btn" type="button" title="Настройки"><span>⚙️</span></button>
+    <button id="refresh" class="icon-btn" type="button" title="Обновить" aria-label="Обновить"><span id="refresh-icon">⟳</span></button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button class="tab is-active" type="button" data-tab="today" role="tab">Сегодня</button>
+  <button class="tab" type="button" data-tab="homework" role="tab">ДЗ на завтра</button>
+  <button class="tab" type="button" data-tab="diary" role="tab">Дневник</button>
+  <button class="tab" type="button" data-tab="schedule" role="tab">Расписание</button>
+  <button class="tab" type="button" data-tab="grades" role="tab">Успеваемость</button>
+  <button class="tab" type="button" data-tab="analytics" role="tab">Аналитика</button>
+  <button class="tab" type="button" data-tab="results" role="tab">Итоги</button>
+  <button class="tab" type="button" data-tab="attendance" role="tab">Посещаемость</button>
+  <button class="tab" type="button" data-tab="calc" role="tab">Калькулятор</button>
+</nav>
+
+<main class="content">
+  <div id="banner" class="banner" hidden></div>
+
+  <section class="panel is-active" data-panel="today">
+    <div class="panel-head">
+      <div><h2>Сегодня</h2><p class="subtle" id="today-date">…</p></div>
+      <button id="today-refresh" class="btn btn-outline" type="button">Обновить</button>
+    </div>
+    <div id="today-content" class="today-list"><div class="skeleton"></div><div class="skeleton"></div></div>
+  </section>
+
+  <section class="panel" data-panel="homework">
+    <div class="panel-head"><div><h2>Домашнее задание</h2><p class="subtle" id="hw-label">…</p></div><button id="copy" class="btn" type="button">Скопировать</button></div>
+    <p class="note" id="hw-note" hidden></p>
+    <div id="hw-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="diary">
+    <div class="panel-head"><div><h2>Дневник</h2><p class="subtle" id="diary-label">Текущая неделя</p></div><div class="diary-nav"><button id="diary-prev" class="btn btn-outline" type="button">← Пред. неделя</button><button id="diary-next" class="btn btn-outline" type="button">След. неделя →</button></div></div>
+    <div id="diary-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="schedule">
+    <div class="panel-head"><div><h2>Расписание звонков</h2><p class="subtle">Обычный день и сокращённый (30 мин)</p></div><div class="schedule-toggle"><button class="btn-toggle is-active" data-mode="40" type="button">Обычные (40 мин)</button><button class="btn-toggle" data-mode="30" type="button">Короткие (30 мин)</button></div></div>
+    <div id="schedule-status" class="schedule-status" hidden></div>
+    <div id="schedule-content" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="grades">
+    <div class="panel-head"><div><h2>Текущая успеваемость</h2><p class="subtle" id="grades-sub">Отметки за период</p></div><select id="term-select" class="term-select"><option value="">Загрузка…</option></select></div>
+    <div id="grades-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="analytics">
+    <div class="panel-head"><div><h2>Аналитика</h2><p class="subtle" id="analytics-sub">Прогноз и динамика по текущим оценкам</p></div><select id="analytics-subject" class="term-select"><option value="all">Все предметы</option></select></div>
+    <div id="analytics-content" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="results">
+    <div class="panel-head"><div><h2>Итоги</h2><p class="subtle" id="results-sub">Рейтинг предметов по среднему баллу</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><select id="results-mode-select" class="term-select"><option value="current">Средний балл за период</option><option value="year">Годовая оценка</option></select><select id="term-select-results" class="term-select"><option value="">Загрузка…</option></select></div></div>
+    <div id="results-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="attendance">
+    <div class="panel-head"><div><h2>Посещаемость</h2><p class="subtle" id="att-sub">Пропуски за период</p></div><select id="term-select-att" class="term-select"><option value="">Загрузка…</option></select></div>
+    <div id="att-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="calc">
+    <div class="panel-head"><div><h2>Калькулятор оценок</h2><p class="subtle">Сколько нужно и что если</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><select id="calc-subject" class="term-select"><option value="">Выберите предмет...</option></select><select id="calc-weight" class="term-select"><option value="1">Вес 1 (ответ)</option><option value="10" selected>Вес 10 (самост.)</option><option value="15">Вес 15</option><option value="20">Вес 20 (контр.)</option><option value="30">Вес 30</option></select></div></div>
+    <div id="calc-content" class="list"></div>
+  </section>
+</main>
+
+<footer class="footer"><span id="updated">—</span><span>Только чтение · данные из «Сетевого города»</span></footer>
+
+<div id="settings-modal" class="modal" hidden>
+  <div class="modal-content">
+    <h3>Настройки</h3>
+    <p class="subtle" style="margin-bottom: 16px;">Снимите галочки, чтобы скрыть ненужные разделы.</p>
+    <div class="settings-list">
+      <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
+      <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
+      <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
+      <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
+      <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
+      <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
+      <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
+      <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
+      <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
+    </div>
+    <div class="settings-block">
+      <div class="settings-block-title">👁 Вид</div>
+      <label class="settings-check"><input type="checkbox" id="setting-compact"> Компактные карточки</label>
+      <label class="settings-check"><input type="checkbox" id="setting-hide-empty"> Скрывать пустые уроки</label>
+      <label class="settings-check"><input type="checkbox" id="setting-today-only"> В расписании только сегодня</label>
+      <div class="settings-row"><label for="setting-font-size">Размер шрифта</label><select id="setting-font-size" class="term-select"><option value="normal">Обычный</option><option value="large">Крупный</option><option value="xlarge">Очень крупный</option></select></div>
+    </div>
+    <div class="settings-block">
+      <label for="color-theme-select" class="settings-block-title">🎨 Цветовая тема</label>
+      <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;"><option value="green">🌿 Зелёная</option><option value="blue">🔵 Синяя</option><option value="pink">🌸 Розовая</option><option value="purple">🟣 Фиолетовая</option><option value="orange">🟠 Оранжевая</option><option value="red">🔴 Красная</option><option value="teal">🌊 Бирюзовая</option><option value="cyan">💧 Голубая</option><option value="slate">⚫ Графитовая</option></select>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+      <button id="logout-btn" class="btn" style="background: var(--red); border-color: var(--red);">Выйти</button>
+      <button id="close-settings" class="btn">Готово</button>
+    </div>
+  </div>
+</div>
+
+<div id="login-overlay" class="modal" hidden>
+  <div class="modal-content" style="max-width: 340px;">
+    <div style="text-align: center; margin-bottom: 20px;"><div class="logo" style="margin:0 auto 10px;width:60px;height:60px;font-size:24px;">СГ</div><h3>Вход в Дневник</h3><p class="subtle">Введите данные от «Сетевого города»</p></div>
+    <div style="display:flex;flex-direction:column;" autocomplete="off">
+      <div class="pass-field"><input type="text" id="login-user" class="login-input" placeholder="Логин" autocomplete="off"><button type="button" id="login-paste" class="pass-toggle">📋</button></div>
+      <div class="pass-field"><input type="password" id="login-pass" class="login-input" placeholder="Пароль" autocomplete="off"><button type="button" id="login-pass-toggle" class="pass-toggle">👁</button></div>
+      <input type="text" id="login-school" class="login-input" value="1244" placeholder="ID школы">
+    </div>
+    <button id="login-btn" class="btn" style="width:100%;margin-top:10px;">Войти</button>
+    <p id="login-error" style="color:var(--red);font-size:13px;margin-top:12px;text-align:center;"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script>
+(function () {
+  const now = new Date();
+  const localIso = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  };
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const dates = [];
+  const weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    dates.push({ iso: localIso(d), weekday: weekdays[i] });
+  }
+  const today = localIso(now);
+  const tomorrowDate = new Date(now); tomorrowDate.setDate(now.getDate() + 1);
+  const tomorrow = localIso(tomorrowDate);
+  const daysAgo = (n) => { const d = new Date(now); d.setDate(now.getDate() - n); return localIso(d); };
+  let refreshed = false;
+
+  const subjectsBase = [
+    { name: "Математика", average: 4.5, marks: [
+      { id: 1, value: "5", date: daysAgo(1), weight: 10, type: "Контрольная", topic: "Дроби" },
+      { id: 2, value: "4", date: daysAgo(6), weight: 1, type: "Ответ", topic: "Уравнения" },
+      { id: 3, value: ".", date: daysAgo(0), weight: 1, type: "Домашняя работа", topic: "Задача 15" },
+      { id: 4, value: "5", date: daysAgo(13), weight: 10, type: "Самостоятельная", topic: "Проценты" },
+      { id: 5, value: "4", date: daysAgo(20), weight: 1, type: "Ответ", topic: "Модуль" }
+    ]},
+    { name: "Русский язык", average: 3.4, marks: [
+      { id: 11, value: "3", date: daysAgo(2), weight: 10, type: "Диктант", topic: "Приставки" },
+      { id: 12, value: "4", date: daysAgo(8), weight: 1, type: "Ответ", topic: "Разбор" },
+      { id: 13, value: "3", date: daysAgo(15), weight: 10, type: "Изложение", topic: "Осень" }
+    ]},
+    { name: "Физика", average: 5, marks: [
+      { id: 21, value: "5", date: daysAgo(3), weight: 10, type: "Лабораторная", topic: "Сила тока" },
+      { id: 22, value: "5", date: daysAgo(10), weight: 1, type: "Ответ", topic: "Законы Ньютона" }
+    ]},
+    { name: "История", average: 3.5, marks: [
+      { id: 31, value: "3", date: daysAgo(4), weight: 1, type: "Ответ", topic: "Реформы" },
+      { id: 32, value: "4", date: daysAgo(11), weight: 10, type: "Тест", topic: "Древняя Русь" }
+    ]},
+    { name: "Информатика", average: 5, marks: [
+      { id: 41, value: "5", date: daysAgo(5), weight: 10, type: "Практика", topic: "Циклы" }
+    ]}
+  ];
+
+  const lessons = [
+    { number: 0, subject: "Разговоры о важном", start: "08:00", end: "08:20" },
+    { number: 1, subject: "Математика", start: "08:25", end: "09:05" },
+    { number: 2, subject: "Русский язык", start: "09:10", end: "09:50" },
+    { number: 3, subject: "Физика", start: "10:05", end: "10:45" },
+    { number: 4, subject: "История", start: "11:00", end: "11:40" }
+  ];
+
+  function diaryDays() {
+    return dates.map((d, index) => {
+      if (index > 4) return { date: d.iso, weekday: d.weekday, lessons: [] };
+      const dayLessons = lessons.map((l) => ({
+        ...l,
+        subject: refreshed && d.iso === today && l.number === 2 ? "Русский язык (изм.)" : l.subject,
+        tasks: [],
+        marks: []
+      }));
+      if (d.iso === today) {
+        dayLessons[1].tasks = [{ id: 101, text: "Упражнение 42, страница 58", type: "Домашнее задание" }];
+        if (refreshed) dayLessons[1].tasks.push({ id: 202, text: "Повторить правила по теме «Дроби»", type: "Домашнее задание" });
+        dayLessons[1].marks = [
+          { id: 1, value: "5", date: daysAgo(1), topic: "Дроби", type: "Контрольная", weight: 10 },
+          { id: 3, value: ".", date: daysAgo(0), topic: "Задача 15", type: "Домашняя работа", weight: 1 }
+        ];
+      }
+      return { date: d.iso, weekday: d.weekday, lessons: dayLessons };
+    });
+  }
+
+  function scheduleDays() {
+    return dates.map((d, index) => ({
+      date: d.iso,
+      weekday: d.weekday,
+      lessons: index > 4 ? [] : lessons.map((l) => ({
+        ...l,
+        subject: refreshed && d.iso === today && l.number === 2 ? "Русский язык (изм.)" : l.subject
+      }))
+    }));
+  }
+
+  function gradesPayload() {
+    const subjects = subjectsBase.map((s) => JSON.parse(JSON.stringify(s)));
+    if (refreshed) {
+      subjects[0].marks.unshift({ id: 99, value: "5", date: daysAgo(0), weight: 20, type: "Контрольная", topic: "Итоговая" });
+      subjects[0].average = 4.62;
+    }
+    const counts = {};
+    subjects.forEach((s) => s.marks.forEach((m) => {
+      const v = String(m.value);
+      if (v !== "." && v !== "-") counts[v] = (counts[v] || 0) + 1;
+    }));
+    return {
+      ok: true, term: "I триместр", subjects,
+      average: 4.15, marksCount: subjects.reduce((n, s) => n + s.marks.length, 0), counts,
+      attendance: { items: [], counts: {}, total: 0 }, asOf: daysAgo(0)
+    };
+  }
+
+  function jsonResponse(data) {
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: () => Promise.resolve(data)
+    });
+  }
+
+  window.fetch = function (input, options) {
+    const url = new URL(String(input), location.href);
+    const path = url.pathname;
+    if (path === "/api/check_auth") return jsonResponse({ authenticated: true });
+    if (path === "/api/terms") return jsonResponse({ ok: true, terms: [
+      { id: "1", name: "I триместр" }, { id: "2", name: "II триместр" }
+    ]});
+    if (path === "/api/quick") return jsonResponse({
+      ok: true,
+      student: { name: "Иванов Иван", class: "8Б", term: "I триместр", average: 4.15, vacation: { name: "Осенние каникулы", days: 12 } },
+      homework: {
+        date: tomorrow, label: "6 ноября", isTomorrow: true, note: "",
+        lessons: [
+          { number: 1, subject: "Математика", start: "08:25", end: "09:05", tasks: [{ id: 301, text: "№ 215, 216", type: "Домашнее задание", details: [] }] },
+          { number: 3, subject: "Физика", start: "10:05", end: "10:45", tasks: [{ id: 302, text: "Параграф 12, вопросы", type: "Домашнее задание", details: [] }] }
+        ],
+        tasksCount: 2
+      },
+      results: { mode: "current", subjects: subjectsBase.map((s) => ({ name: s.name, average: s.average })), common: 4.15 },
+      updated: now.toISOString()
+    });
+    if (path === "/api/grades") return jsonResponse(gradesPayload());
+    if (path === "/api/diary") return jsonResponse({
+      ok: true, weekStart: dates[0].iso, weekEnd: dates[6].iso, days: diaryDays()
+    });
+    if (path === "/api/schedule") return jsonResponse({
+      ok: true, weekStart: dates[0].iso, weekEnd: dates[6].iso, days: scheduleDays()
+    });
+    if (path === "/api/results") return jsonResponse({
+      ok: true, mode: "current", term: "I триместр",
+      subjects: subjectsBase.map((s) => ({ name: s.name, average: s.average, marksCount: s.marks.length, final: null })),
+      common: 4.15
+    });
+    if (path.startsWith("/api/assignment/")) return jsonResponse({
+      ok: true, teachers: ["Петрова А. С."], details: ["Выполнить в тетради, сфотографировать и принести."], files: ["правила.pdf"]
+    });
+    if (path === "/api/refresh") { refreshed = true; return jsonResponse({ ok: true }); }
+    if (path === "/api/logout") return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true });
+  };
+})();
+</script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

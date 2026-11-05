@@ -1,6 +1,8 @@
 import { state } from './js/state.js';
 import * as api from './js/api.js';
-import { escapeHtml, prettyDateTime, toast } from './js/utils.js';
+import { escapeHtml, prettyDateTime, toast, localIsoDate, weekStartIso } from './js/utils.js';
+import { applyUiSettings, bindSettingsControls } from './js/settings.js';
+import { refreshChanges, clearChanges } from './js/changes.js';
 
 import { renderHeader } from './js/views/header.js';
 import { renderHomework } from './js/views/homework.js';
@@ -8,6 +10,21 @@ import { renderDiary } from './js/views/diary.js';
 import { renderScheduleData, updateScheduleStatus } from './js/views/schedule.js';
 import { renderGrades, renderResults, renderAttendance } from './js/views/grades.js';
 import { renderCalculator } from './js/views/calculator.js';
+import { renderAnalytics } from './js/views/analytics.js';
+import { renderToday, updateTodayLive } from './js/views/today.js';
+
+// --- Безопасный localStorage ---
+// В приватном режиме / при жёстких настройках браузера доступ может бросать
+// исключение. Тогда просто работаем без локального кэша, а не ломаем запуск.
+function lsGet(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+function lsSet(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* ignore */ }
+}
+function lsRemove(key) {
+  try { localStorage.removeItem(key); } catch (_) { /* ignore */ }
+}
 
 // --- Надёжное хранилище: localStorage + мосты PyWebView/Android ---
 // localStorage может быть недоступен (private_mode, file://, смена порта).
@@ -57,13 +74,13 @@ function applyColorTheme(theme) {
 
 function initTheme() {
   // 1. Мгновенно применяем из localStorage (синхронно, без мигания).
-  const isDark = localStorage.getItem("sgo.theme") === "dark";
+  const isDark = lsGet("sgo.theme") === "dark";
   if (isDark) {
     document.body.classList.add("dark-theme");
     const icon = document.querySelector("#theme-icon");
     if (icon) icon.textContent = "☀️";
   }
-  applyColorTheme(localStorage.getItem("sgo.colorTheme") || "green");
+  applyColorTheme(lsGet("sgo.colorTheme") || "green");
 
   // 2. Асинхронно сверяемся с нативным хранилищем (актуально при private_mode
   //    или смене порта). Если нативное значение отличается — применяем его.
@@ -81,19 +98,19 @@ async function reconcileFromNative() {
     if (!theme && !color) return;
     _reconcileDone = true;
 
-    const localTheme = localStorage.getItem("sgo.theme");
+    const localTheme = lsGet("sgo.theme");
     if (theme && theme !== localTheme) {
       const isDark = theme === "dark";
       document.body.classList.toggle("dark-theme", isDark);
       const icon = document.querySelector("#theme-icon");
       if (icon) icon.textContent = isDark ? "☀️" : "🌙";
-      try { localStorage.setItem("sgo.theme", theme); } catch (_) {}
+      lsSet("sgo.theme", theme);
     }
 
-    const localColor = localStorage.getItem("sgo.colorTheme") || "green";
+    const localColor = lsGet("sgo.colorTheme") || "green";
     if (color && color !== localColor) {
       applyColorTheme(color);
-      try { localStorage.setItem("sgo.colorTheme", color); } catch (_) {}
+      lsSet("sgo.colorTheme", color);
       const sel = document.querySelector("#color-theme-select");
       if (sel) sel.value = color;
     }
@@ -121,7 +138,7 @@ function initSettings() {
   // --- ВЫБОР ЦВЕТОВОЙ ТЕМЫ ---
   const colorSelect = document.querySelector("#color-theme-select");
   if (colorSelect) {
-    colorSelect.value = localStorage.getItem("sgo.colorTheme") || "green";
+    colorSelect.value = lsGet("sgo.colorTheme") || "green";
 
     colorSelect.addEventListener("change", () => {
       const value = colorSelect.value;
@@ -154,7 +171,19 @@ function initSettings() {
         state.results = null;
         state.diary = null;
         state.schedule = null;
-        localStorage.removeItem("sgo.term");
+        state.quickPromise = null;
+        state.gradesPromise = null;
+        state.resultsPromise = null;
+        state.diaryPromise = null;
+        state.schedulePromise = null;
+        state.currentWeek = null;
+        state.scheduleWeek = null;
+        state.authenticated = false;
+        state.calcTerm = null;
+        state.simAdjustments = {};
+        state.simAdded = [];
+        clearChanges();
+        lsRemove("sgo.term");
 
         modal.hidden = true;
         document.querySelector("#login-pass").value = "";
@@ -165,8 +194,12 @@ function initSettings() {
     });
   }
 
-  const toggles = document.querySelectorAll(".tab-toggle");
-  const hiddenTabs = JSON.parse(localStorage.getItem("sgo.hiddenTabs")) || [];
+  const toggles = Array.from(document.querySelectorAll(".tab-toggle"));
+  let hiddenTabs = [];
+  try {
+    const parsed = JSON.parse(lsGet("sgo.hiddenTabs") || "[]");
+    if (Array.isArray(parsed)) hiddenTabs = parsed;
+  } catch (_) { /* повреждённое значение — игнорируем */ }
 
   toggles.forEach(t => {
     if (hiddenTabs.includes(t.value)) {
@@ -177,23 +210,67 @@ function initSettings() {
     if (tabBtn) tabBtn.style.display = t.checked ? "" : "none";
 
     t.addEventListener("change", () => {
-      const currentHidden = JSON.parse(localStorage.getItem("sgo.hiddenTabs")) || [];
-      let newHidden;
+      // Не даём скрыть последнюю видимую вкладку — иначе экран опустеет.
+      if (!t.checked && !toggles.some(other => other.checked)) {
+        t.checked = true;
+        toast("Должна остаться хотя бы одна вкладка");
+        return;
+      }
 
+      let currentHidden = [];
+      try {
+        const parsed = JSON.parse(lsGet("sgo.hiddenTabs") || "[]");
+        if (Array.isArray(parsed)) currentHidden = parsed;
+      } catch (_) { /* ignore */ }
+
+      let newHidden;
       if (t.checked) {
         newHidden = currentHidden.filter(id => id !== t.value);
       } else {
         newHidden = [...currentHidden, t.value];
       }
 
-      localStorage.setItem("sgo.hiddenTabs", JSON.stringify(newHidden));
+      lsSet("sgo.hiddenTabs", JSON.stringify(newHidden));
       if (tabBtn) tabBtn.style.display = t.checked ? "" : "none";
 
       if (!t.checked && state.tab === t.value) {
-        selectTab("homework");
+        ensureVisibleTab();
       }
     });
   });
+
+  // Новые настройки вида: применяем сразу и перерисовываем зависимые экраны.
+  bindSettingsControls((name) => {
+    if (name === "hideEmptyLessons") {
+      if (state.diary) renderDiary(state.diary);
+      if (state.schedule) renderScheduleData(state.schedule);
+    } else if (name === "todayOnly") {
+      if (state.schedule) renderScheduleData(state.schedule);
+    }
+    if (state.tab === "today") renderToday();
+  });
+
+  // Если сохранённая активная вкладка скрыта — открываем первую видимую.
+  ensureVisibleTab();
+}
+
+function ensureVisibleTab() {
+  const active = document.querySelector(".tab.is-active");
+  if (active && active.style.display !== "none") return;
+
+  const allTabs = Array.from(document.querySelectorAll(".tab"));
+  let firstVisible = allTabs.find(tab => tab.style.display !== "none");
+
+  // Совсем все вкладки скрыты (например, повреждённые настройки) —
+  // принудительно показываем первую.
+  if (!firstVisible && allTabs.length) {
+    firstVisible = allTabs[0];
+    firstVisible.style.display = "";
+    const toggle = document.querySelector(`.tab-toggle[value="${firstVisible.dataset.tab}"]`);
+    if (toggle) toggle.checked = true;
+  }
+
+  if (firstVisible) selectTab(firstVisible.dataset.tab);
 }
 
 // --- Загрузка данных ---
@@ -202,9 +279,11 @@ async function loadQuick(force) {
   state.quickPromise = api.getQuick()
     .then((data) => {
       state.quick = data;
+      refreshChanges();
       renderHeader(data.student);
       renderHomework(data.homework);
       renderResults(data.results);
+      if (state.tab === "today") renderToday();
       document.querySelector("#updated").textContent = `Обновлено: ${prettyDateTime(data.updated)}`;
       return data;
     })
@@ -229,9 +308,12 @@ function loadGrades(force) {
   state.gradesPromise = api.getGrades(term)
     .then((data) => {
       state.grades = data;
+      refreshChanges();
       renderGrades(data);
       renderAttendance(data);
+      renderAnalytics(data);
       renderCalculator(data);
+      if (state.tab === "today") renderToday();
       return data;
     })
     .catch((err) => {
@@ -255,7 +337,9 @@ function loadDiary(weekIso) {
     .then((data) => {
       state.diary = data;
       state.currentWeek = data.weekStart;
+      refreshChanges();
       renderDiary(data);
+      if (state.tab === "today") renderToday();
       return data;
     })
     .catch((err) => {
@@ -272,7 +356,9 @@ function loadSchedule(weekIso) {
     .then((data) => {
       state.schedule = data;
       state.scheduleWeek = data.weekStart;
+      refreshChanges();
       renderScheduleData(data);
+      if (state.tab === "today") renderToday();
       return data;
     })
     .catch((err) => {
@@ -356,7 +442,7 @@ async function loadTerms() {
   try {
     const data = await api.fetchJson("/api/terms");
     const terms = data.terms || [];
-    const saved = localStorage.getItem("sgo.term") || "";
+    const saved = lsGet("sgo.term") || "";
     for (const sel of TERM_SELECTORS) {
       const el = document.querySelector(sel);
       if (!el) continue;
@@ -388,7 +474,7 @@ function bindTermSelectors() {
     const el = document.querySelector(sel);
     if (!el) continue;
     el.addEventListener("change", () => {
-      localStorage.setItem("sgo.term", el.value);
+      lsSet("sgo.term", el.value);
       syncTermSelectors(el);
       state.grades = null;
       state.results = null;          // ← сбрасываем старый результат
@@ -412,8 +498,6 @@ function resultsParams() {
 function loadResults(force) {
   const list = document.querySelector("#results-list");
   if (!list) return Promise.resolve(null);
-<<<<<<< Updated upstream
-=======
 
   // При смене терма/режима (force=true) обязательно сбрасываем старые
   // данные и промис — иначе при ошибке/пустом ответе пользователь видит
@@ -423,7 +507,6 @@ function loadResults(force) {
     state.results = null;
   }
 
->>>>>>> Stashed changes
   if (state.resultsPromise && !force) return state.resultsPromise;
   if (!state.results) {
     list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
@@ -449,13 +532,13 @@ function loadResults(force) {
 function bindResultsControls() {
   const modeEl = document.querySelector("#results-mode-select");
   const termEl = document.querySelector("#term-select-results");
-  const savedMode = localStorage.getItem("sgo.resultsMode");
+  const savedMode = lsGet("sgo.resultsMode");
   if (modeEl && savedMode) modeEl.value = savedMode;
   applyResultsMode();
 
   if (modeEl) {
     modeEl.addEventListener("change", () => {
-      localStorage.setItem("sgo.resultsMode", modeEl.value);
+      lsSet("sgo.resultsMode", modeEl.value);
       applyResultsMode();
       loadResults(true);
     });
@@ -475,12 +558,37 @@ function applyResultsMode() {
   termEl.setAttribute("aria-hidden", isYear ? "true" : "false");
 }
 
+function ensureTodayData() {
+  const thisWeek = weekStartIso(localIsoDate());
+  const tasks = [];
+
+  if (!state.quick && !state.quickPromise) tasks.push(loadQuick());
+  if ((!state.diary || state.diary.weekStart !== thisWeek) && !state.diaryPromise) {
+    tasks.push(loadDiary(thisWeek));
+  }
+  if ((!state.schedule || state.schedule.weekStart !== thisWeek) && !state.schedulePromise) {
+    tasks.push(loadSchedule(thisWeek));
+  }
+  if (!state.grades && !state.gradesPromise) tasks.push(loadGrades());
+
+  renderToday();
+
+  if (tasks.length) {
+    Promise.allSettled(tasks).then(() => {
+      if (state.tab === "today") renderToday();
+    });
+  }
+}
+
 function selectTab(name) {
   state.tab = name;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("is-active", p.dataset.panel === name));
 
-  if (name === "grades" || name === "attendance" || name === "calc") loadGrades();
+  if (!state.authenticated) return;
+
+  if (name === "today") ensureTodayData();
+  if (name === "grades" || name === "attendance" || name === "calc" || name === "analytics") loadGrades();
   if (name === "results") loadResults();
   if (name === "diary" && !state.diary) loadDiary();
   if (name === "schedule" && !state.schedule) loadSchedule();
@@ -503,6 +611,7 @@ async function checkAuth() {
 }
 
 function showLogin() {
+  state.authenticated = false;
   const overlay = document.querySelector("#login-overlay");
   overlay.hidden = false;
 
@@ -566,8 +675,13 @@ function showLogin() {
 
       if (res.ok) {
         overlay.hidden = true;
+        state.authenticated = true;
         loadQuick();
-        loadTerms().then(() => { loadGrades(); loadResults(); });
+        loadTerms().then(() => {
+          loadGrades(true);
+          loadResults(true);
+          selectTab(state.tab);
+        });
       } else {
         let msg = res.error || "Ошибка входа";
         if (res.login) {
@@ -588,6 +702,7 @@ function showLogin() {
 
 function init() {
   initTheme();
+  applyUiSettings();
 
   // PyWebView может быть ещё не готов — ждём событие pywebviewready.
   if (window.pywebview?.api) {
@@ -606,9 +721,16 @@ function init() {
   });
 
   document.querySelector("#refresh").addEventListener("click", refreshAll);
+  const todayRefresh = document.querySelector("#today-refresh");
+  if (todayRefresh) todayRefresh.addEventListener("click", refreshAll);
   document.querySelector("#copy").addEventListener("click", copyHomework);
   bindTermSelectors();
   bindResultsControls();
+
+  window.addEventListener("sgo:navigate", (event) => {
+    const tab = event.detail && event.detail.tab;
+    if (tab) selectTab(tab);
+  });
 
   document.querySelector("#diary-prev").addEventListener("click", () => {
     if (!state.currentWeek) return;
@@ -631,6 +753,7 @@ function init() {
       if (state.schedule) {
         renderScheduleData(state.schedule);
       }
+      if (state.tab === "today") renderToday();
     });
   });
 
@@ -638,8 +761,13 @@ function init() {
 
   checkAuth().then(isAuth => {
     if (isAuth) {
+      state.authenticated = true;
       loadQuick();
-      loadTerms().then(() => { loadGrades(); loadResults(); });
+      loadTerms().then(() => {
+        loadGrades(true);
+        loadResults(true);
+        selectTab(state.tab);
+      });
     } else {
       showLogin();
     }
@@ -647,6 +775,7 @@ function init() {
 
   setInterval(() => {
     if (state.schedule) updateScheduleStatus();
+    if (state.tab === "today") updateTodayLive();
   }, 10000);
 }
 

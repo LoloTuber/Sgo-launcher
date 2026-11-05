@@ -39,10 +39,12 @@
 </header>
 
 <nav class="tabs" id="tabs" role="tablist">
-  <button class="tab is-active" type="button" data-tab="homework" role="tab">ДЗ на завтра</button>
+  <button class="tab is-active" type="button" data-tab="today" role="tab">Сегодня</button>
+  <button class="tab" type="button" data-tab="homework" role="tab">ДЗ на завтра</button>
   <button class="tab" type="button" data-tab="diary" role="tab">Дневник</button>
   <button class="tab" type="button" data-tab="schedule" role="tab">Расписание</button>
   <button class="tab" type="button" data-tab="grades" role="tab">Успеваемость</button>
+  <button class="tab" type="button" data-tab="analytics" role="tab">Аналитика</button>
   <button class="tab" type="button" data-tab="results" role="tab">Итоги</button>
   <button class="tab" type="button" data-tab="attendance" role="tab">Посещаемость</button>
   <button class="tab" type="button" data-tab="calc" role="tab">Калькулятор</button>
@@ -51,7 +53,18 @@
 <main class="content">
   <div id="banner" class="banner" hidden></div>
 
-  <section class="panel is-active" data-panel="homework">
+  <section class="panel is-active" data-panel="today">
+    <div class="panel-head">
+      <div><h2>Сегодня</h2><p class="subtle" id="today-date">…</p></div>
+      <button id="today-refresh" class="btn btn-outline" type="button">Обновить</button>
+    </div>
+    <div id="today-content" class="today-list">
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="homework">
     <div class="panel-head">
       <div><h2>Домашнее задание</h2><p class="subtle" id="hw-label">…</p></div>
       <button id="copy" class="btn" type="button">Скопировать</button>
@@ -89,6 +102,16 @@
       <select id="term-select" class="term-select" aria-label="Учебный период"><option value="">Загрузка…</option></select>
     </div>
     <div id="grades-list" class="list"></div>
+  </section>
+
+  <section class="panel" data-panel="analytics">
+    <div class="panel-head">
+      <div><h2>Аналитика</h2><p class="subtle" id="analytics-sub">Прогноз и динамика по текущим оценкам</p></div>
+      <select id="analytics-subject" class="term-select" aria-label="Предмет для графика">
+        <option value="all">Все предметы</option>
+      </select>
+    </div>
+    <div id="analytics-content" class="list"></div>
   </section>
 
   <section class="panel" data-panel="results">
@@ -142,17 +165,34 @@
     <h3>Настройки</h3>
     <p class="subtle" style="margin-bottom: 16px;">Снимите галочки, чтобы скрыть ненужные разделы.</p>
     <div class="settings-list">
+      <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
       <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
       <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
       <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
       <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
+      <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
       <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
       <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
       <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
     </div>
 
-    <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);">
-      <label for="color-theme-select" style="font-size: 14px; font-weight: 600; display: block; margin-bottom: 8px;">🎨 Цветовая тема</label>
+    <div class="settings-block">
+      <div class="settings-block-title">👁 Вид</div>
+      <label class="settings-check"><input type="checkbox" id="setting-compact"> Компактные карточки</label>
+      <label class="settings-check"><input type="checkbox" id="setting-hide-empty"> Скрывать пустые уроки</label>
+      <label class="settings-check"><input type="checkbox" id="setting-today-only"> В расписании только сегодня</label>
+      <div class="settings-row">
+        <label for="setting-font-size">Размер шрифта</label>
+        <select id="setting-font-size" class="term-select">
+          <option value="normal">Обычный</option>
+          <option value="large">Крупный</option>
+          <option value="xlarge">Очень крупный</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-block">
+      <label for="color-theme-select" class="settings-block-title">🎨 Цветовая тема</label>
       <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;">
         <option value="green">🌿 Зелёная (по умолчанию)</option>
         <option value="blue">🔵 Синяя</option>

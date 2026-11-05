@@ -1,15 +1,18 @@
 import { escapeHtml, shortDate, markCls } from '../utils.js';
+import { isNewMark, newMarksCount } from '../changes.js';
 
 export function renderGrades(data) {
   const label = document.querySelector("#grades-sub");
   const term = escapeHtml(data.term || "Текущий период");
-  label.innerHTML = `Отметки за период · ${term}`;
+  const fresh = newMarksCount();
+  label.innerHTML = `Отметки за период · ${term}` + (fresh ? ` · новых: ${fresh}` : "");
 
   const counts = data.counts || {};
   const summary = [
     `<span class="chip">Средний балл <b>${data.average != null ? String(data.average).replace(".", ",") : "—"}</b></span>`,
     `<span class="chip">Оценок <b>${data.marksCount || 0}</b></span>`,
   ];
+  if (fresh) summary.push(`<span class="chip chip-new">Новых <b>${fresh}</b></span>`);
   ["5", "4", "3", "2"].forEach((v) => {
     if (counts[v]) summary.push(`<span class="chip">«${v}» <b>${counts[v]}</b></span>`);
   });
@@ -71,11 +74,13 @@ export function renderGrades(data) {
     subjects.map((subj) => {
       const marksHtml = subj.marks.map((m) => {
         const w = m.weight > 1 ? `<span class="weight-badge">x${m.weight}</span>` : "";
+        const isNew = isNewMark(subj.name, m);
         return `
-          <span class="mark-chip ${markCls(m.value)}">
+          <span class="mark-chip ${markCls(m.value)} ${isNew ? "is-new" : ""}" ${isNew ? 'title="Новая оценка"' : ""}>
             ${escapeHtml(m.value)}
             <small>${escapeHtml(shortDate(m.date))}</small>
             ${w}
+            ${isNew ? `<span class="new-dot"></span>` : ""}
           </span>
         `;
       }).join("");
@@ -96,64 +101,47 @@ export function renderResults(results) {
   const list = document.querySelector("#results-list");
   if (!list) return;
 
+  results = results || {};
   const mode = results.mode === "year" ? "year" : "current";
   const subjects = (results.subjects || []).filter((s) => s.average != null);
 
   // Подпись над списком: выбранный режим и период.
   const sub = document.querySelector("#results-sub");
   if (sub) {
-    const period = results.term ? ` · ${escapeHtml(results.term)}` : "";
+    const period = results.term ? ` · ${results.term}` : "";
     sub.textContent = mode === "year"
       ? `Годовые отметки${period}`
       : `Рейтинг предметов по среднему баллу${period}`;
   }
 
-<<<<<<< Updated upstream
-=======
   // Сообщение об ошибке/предупреждении от бэкенда — показываем всегда сверху.
   const errText = results.error || results.warning || "";
   const errHtml = errText
     ? `<div class="banner" style="margin-bottom:12px;">${escapeHtml(errText)}</div>`
     : "";
 
->>>>>>> Stashed changes
   if (!subjects.length) {
     const hint = mode === "year"
       ? "Годовые оценки ещё не выставлены — выберите триместр или дождитесь конца учебного года."
       : "Средние баллы не рассчитаны.";
-<<<<<<< Updated upstream
-    list.innerHTML = `<div class="empty"><strong>Пока пусто</strong>${hint}</div>`;
-=======
     list.innerHTML = errHtml + `<div class="empty"><strong>Пока пусто</strong>${hint}</div>`;
->>>>>>> Stashed changes
     return;
   }
 
   // Сортируем по убыванию балла
   subjects.sort((a, b) => b.average - a.average);
 
-<<<<<<< Updated upstream
-  const common = results.common != null
-    ? `<div class="summary">
-         <span class="chip">${mode === "year" ? "Средняя годовая оценка" : "Общий средний балл"} <b>${String(results.common).replace(".", ",")}</b></span>
-         <span class="chip">Предметов <b>${subjects.length}</b></span>
-       </div>`
-    : "";
-=======
   // --- Вспомогательные ---
   const clampMark = (v) => Math.max(2, Math.min(5, Math.round(v)));
   const fmt = (v) => String(v).replace(".", ",").slice(0, 4);
->>>>>>> Stashed changes
 
   // Распределение по округлённым отметкам
   const distribution = { 5: 0, 4: 0, 3: 0, 2: 0 };
   subjects.forEach((s) => distribution[clampMark(s.average)]++);
 
-  // Общий средний балл
-  let commonAvg = results.common != null ? parseFloat(results.common) : NaN;
-  if (isNaN(commonAvg)) {
-    commonAvg = subjects.reduce((sum, s) => sum + s.average, 0) / subjects.length;
-  }
+  // ИСПРАВЛЕНИЕ: Всегда считаем средний балл сами на основе видимых предметов,
+  // чтобы избежать расхождений с бэкендом СГО (когда предметов 18, а оценок 17).
+  let commonAvg = subjects.reduce((sum, s) => sum + s.average, 0) / subjects.length;
 
   // Цвет и подпись для общего балла
   let avgColor = "#10b981";
@@ -223,13 +211,6 @@ export function renderResults(results) {
     else if (index === 2) medal = `<span class="result-medal">🥉</span>`;
     else medal = `<span class="result-medal result-medal-num">${index + 1}</span>`;
 
-    let extra = "";
-    if (mode === "current" && s.final != null) {
-      extra = `<span class="result-note">годовая ${fmt(s.final)}</span>`;
-    } else if (mode === "current" && s.marksCount) {
-      extra = `<span class="result-note">${s.marksCount} оц.</span>`;
-    }
-
     // В режиме «триместр» показываем подсказку с годовой, если она уже есть.
     let extra = "";
     if (mode === "current" && s.final != null) {
@@ -239,14 +220,6 @@ export function renderResults(results) {
     }
 
     return `
-<<<<<<< Updated upstream
-      <div class="result-row">
-        <span class="name" style="display:flex; align-items:center;">
-          ${medal} ${escapeHtml(s.name)}
-        </span>
-        <span class="value">${extra}${String(s.average).replace(".", ",")}</span>
-      </div>`;
-=======
       <div class="result-card">
         ${medal}
         <div class="result-main">
@@ -262,7 +235,6 @@ export function renderResults(results) {
         </div>
       </div>
     `;
->>>>>>> Stashed changes
   }).join("");
 
   list.innerHTML = errHtml + summaryHtml + `<div class="results-grid">${rows}</div>`;

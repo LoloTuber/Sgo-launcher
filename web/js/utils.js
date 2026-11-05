@@ -30,6 +30,42 @@ export const shortDate = (iso) => {
   return p.length === 3 ? `${p[2]}.${p[1]}` : String(iso);
 };
 
+/** Локальная дата в формате YYYY-MM-DD (без сдвига часового пояса). */
+export function localIsoDate(dateObj = new Date()) {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const day = String(dateObj.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** Разбор YYYY-MM-DD как локальной даты (а не UTC). */
+export function parseIsoDate(iso) {
+  const parts = String(iso || "").slice(0, 10).split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+export function addDaysIso(iso, days) {
+  const date = parseIsoDate(iso);
+  if (!date) return "";
+  date.setDate(date.getDate() + days);
+  return localIsoDate(date);
+}
+
+/** Понедельник недели, к которой относится дата. */
+export function weekStartIso(iso) {
+  const date = parseIsoDate(iso);
+  if (!date) return "";
+  const shift = (date.getDay() + 6) % 7; // понедельник = 0
+  date.setDate(date.getDate() - shift);
+  return localIsoDate(date);
+}
+
+export function capitalize(text) {
+  const value = String(text || "");
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
 export const prettyDateTime = (iso) => {
   if (!iso) return "";
   const d = new Date(iso);
@@ -38,6 +74,28 @@ export const prettyDateTime = (iso) => {
     day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
   });
 };
+
+/** Точка или прочерк в журнале — это долг, а не числовая отметка. */
+export function isDebtMark(value) {
+  const s = String(value == null ? "" : value).trim();
+  return s === "." || s === "-";
+}
+
+/** «Разговоры о важном» — только понедельник; в дневнике не показываем. */
+export function isImportantTalkSubject(subject) {
+  return /^разговоры?\s+о\s+важном/i.test(String(subject == null ? "" : subject).trim());
+}
+
+/**
+ * Числовое значение отметки для расчётов.
+ * Долг («.»/«-») по просьбе пользователя считаем как «2».
+ */
+export function markNumber(value, debtAs = 2) {
+  const s = String(value == null ? "" : value).trim();
+  if (isDebtMark(s)) return debtAs;
+  const n = parseFloat(s.replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 export function markCls(v) {
   const s = String(v || "").trim().replace(",", ".");
