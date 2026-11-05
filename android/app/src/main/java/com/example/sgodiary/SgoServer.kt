@@ -21,7 +21,7 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
         if (savedLogin != null && savedPass != null) {
             Thread {
                 try {
-                    Log.d("SGO_SERVER", "Автовход для $savedLogin...")
+                    Log.i("SGO_SERVER", "Автовход для $savedLogin...")
                     client.login(savedLogin, savedPass, savedSchool!!)
                 } finally {
                     autoLoginDone.countDown()
@@ -69,7 +69,9 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
         val method = session.method
-        Log.d("SGO_SERVER", "Запрос: $method $uri")
+
+        // Log.i (не Log.d) — чтобы запросы были видны в стандартном фильтре logcat.
+        Log.i("SGO_SERVER", "Запрос: $method $uri params=${session.parameters}")
 
         if (uri.startsWith("/api/")) {
             if (uri == "/api/refresh" && method == Method.POST) {
@@ -79,18 +81,16 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
             }
 
             if (uri == "/api/check_auth") {
-                return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true, \"authenticated\":${checkAuth()}}")
+                return newFixedLengthResponse(Response.Status.OK, "application/json",
+                    "{\"ok\":true, \"authenticated\":${checkAuth()}}")
             }
 
-            // --- ДОБАВЛЕННЫЙ БЛОК ВЫХОДА ---
             if (uri == "/api/logout" && method == Method.POST) {
-                // ИСПОЛЬЗУЕМ commit() ВМЕСТО apply(), ЧТОБЫ ДАННЫЕ СТЕРЛИСЬ МГНОВЕННО
                 prefs.edit().remove("login").remove("pass").remove("school").commit()
                 client.reset()
-                Log.d("SGO_SERVER", "Пользователь вышел из аккаунта")
+                Log.i("SGO_SERVER", "Пользователь вышел из аккаунта")
                 return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true}")
             }
-            // ------------------------------
 
             if (uri == "/api/login" && method == Method.POST) {
                 try {
@@ -128,17 +128,20 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                         return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json", fail.toString())
                     }
                 } catch (e: Exception) {
-                    return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", "{\"ok\":false, \"error\":\"Ошибка сервера: ${e.message}\"}")
+                    return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                        "{\"ok\":false, \"error\":\"Ошибка сервера: ${e.message}\"}")
                 }
             }
 
             if (!checkAuth()) {
-                return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json", "{\"ok\":false, \"error\":\"Не авторизован\"}")
+                return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json",
+                    "{\"ok\":false, \"error\":\"Не авторизован\"}")
             }
 
             val query = session.parameters
             val weekStart = query["week"]?.firstOrNull()
             val termId = query["term"]?.firstOrNull()
+            val mode = query["mode"]?.firstOrNull() ?: "current"
 
             val payload: String? = try {
                 retryOnAuth {
@@ -146,6 +149,7 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                         uri.startsWith("/api/quick") -> client.getQuickJson()
                         uri.startsWith("/api/diary") -> client.getDiaryJson(weekStart)
                         uri.startsWith("/api/schedule") -> client.getScheduleJson(weekStart)
+                        uri.startsWith("/api/results") -> client.getResultsJson(termId, mode)
                         uri.startsWith("/api/grades") -> client.getGradesJson(termId)
                         uri.startsWith("/api/terms") -> client.getTermsJson()
                         uri.startsWith("/api/assignment/") -> {
@@ -156,7 +160,8 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                     }
                 }
             } catch (e: AuthExpiredException) {
-                return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json", "{\"ok\":false, \"error\":\"Сессия истекла, войдите заново\"}")
+                return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json",
+                    "{\"ok\":false, \"error\":\"Сессия истекла, войдите заново\"}")
             } catch (e: Exception) {
                 return newFixedLengthResponse(
                     Response.Status.INTERNAL_ERROR,
@@ -168,6 +173,7 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
             if (payload == null) {
                 return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"ok\":false}")
             }
+            Log.i("SGO_SERVER", "Ответ $uri: ${payload.length} байт")
             return newFixedLengthResponse(Response.Status.OK, "application/json", payload)
         }
 
