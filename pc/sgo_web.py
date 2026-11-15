@@ -73,6 +73,7 @@ class AppState:
         self.client: Optional[core.SgoClient] = None
         self.reports: Optional[ReportService] = None
         self._cache: Dict[str, tuple] = {}
+        self._report_failures: Dict[str, tuple] = {}
 
     def connect(self) -> None:
         if self.client is not None: return
@@ -92,6 +93,7 @@ class AppState:
             self.client = None
             self.reports = None
             self._cache.clear()
+            self._report_failures.clear()
 
     def cached(self, key: str, ttl: float, producer: Callable[[], Any]) -> Any:
         now = time.time()
@@ -100,6 +102,26 @@ class AppState:
         value = producer()
         self._cache[key] = (now, value)
         return value
+
+    def remember(self, key: str, value: Any) -> None:
+        """Запоминает значение как «последнее удачное» (без срока годности)."""
+        self._cache[key] = (time.time(), value)
+
+    def last_good(self, key: str) -> Any:
+        """Последнее удачное значение или None."""
+        entry = self._cache.get(key)
+        return entry[1] if entry else None
+
+    def note_report_failure(self, key: str, error: str) -> None:
+        """Запоминает неудачу запроса отчёта, чтобы не долбить СГО подряд."""
+        self._report_failures[key] = (time.time(), error)
+
+    def recent_report_failure(self, key: str, window: float = 60.0) -> Optional[str]:
+        """Текст последней ошибки отчёта, если она была совсем недавно."""
+        entry = self._report_failures.get(key)
+        if entry and time.time() - entry[0] < window:
+            return entry[1]
+        return None
 
 def dashboard_data(state: AppState) -> Dict[str, Any]:
     with state.lock:
@@ -257,7 +279,16 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
             def producer():
                 html = state.reports.generate_html("StudentTotal", overrides)
                 return parse_student_total(html)
-            parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
+            report_key = f"report:studenttotal:{term_id or 'current'}"
+            # Не долбим СГО, если предыдущий запрос отчёта недавно упал.
+            recent = state.recent_report_failure(report_key)
+            if recent:
+                raise ReportError(recent)
+            try:
+                parsed = state.cached(report_key, 600, producer)
+            except Exception as exc:
+                state.note_report_failure(report_key, str(exc))
+                raise
         except Exception as exc:
             traceback.print_exc()
             print(f"! StudentTotal ({term_id=}) failed: {exc}", file=sys.stderr)
@@ -667,6 +698,44 @@ def _take_mark_info(index: Dict[tuple, List[Dict[str, Any]]], subject: str,
     return None
 
 
+def _grades_cache_path() -> Path:
+    """Файл с последними удачными данными успеваемости."""
+    return core.config_dir() / "sgo_grades_lastgood.json"
+
+
+def _load_last_good_grades(term_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Последние удачные данные успеваемости с диска (после перезапуска тоже)."""
+    try:
+        data = json.loads(_grades_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    item = data.get(str(term_id or "current"))
+    return item if isinstance(item, dict) else None
+
+
+def _save_last_good_grades(term_id: Optional[str], payload: Dict[str, Any]) -> None:
+    """Сохраняет удачные данные успеваемости на диск."""
+    path = _grades_cache_path()
+    try:
+        data: Dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (OSError, ValueError):
+                data = {}
+        data[str(term_id or "current")] = payload
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        pass
+
+
 def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
     with state.lock:
         state.connect()
@@ -675,11 +744,22 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
 
         overrides = {}
         if term_id: overrides["TERMID"] = term_id
+        report_key = f"report:studenttotal:{term_id or 'current'}"
         try:
             def producer():
                 html = state.reports.generate_html("StudentTotal", overrides)
                 return parse_student_total(html)
-            parsed = state.cached(f"report:studenttotal:{term_id or 'current'}", 600, producer)
+            # СГО ограничивает число запросов отчётов одним пользователем.
+            # Если предыдущий запрос недавно упал — не повторяем его сразу,
+            # а ждём и показываем последние удачные данные.
+            recent = state.recent_report_failure(report_key)
+            if recent:
+                raise ReportError(recent)
+            try:
+                parsed = state.cached(report_key, 600, producer)
+            except Exception as exc:
+                state.note_report_failure(report_key, str(exc))
+                raise
 
             # Веса оценок: без них калькулятор считает все оценки как x1.
             try:
@@ -751,7 +831,7 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
                     code = (absence.get("code") or "").upper()
                     absences.append({"date": absence.get("date"), "code": code, "label": ATTENDANCE_CODES.get(code, code), "subject": subject_name, "counted": code not in NOT_ABSENCE_CODES})
                     if code not in NOT_ABSENCE_CODES: absent_counts[code] = absent_counts.get(code, 0) + 1
-            return {
+            payload = {
                 "subjects": subjects,
                 "average": round(weighted_sum / weight_total, 2) if weight_total else None,
                 "marksCount": len(all_values), "counts": counts, "debtsCount": debts_count,
@@ -760,12 +840,31 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
                                "available": bool(parsed.get("subjects"))},
                 "asOf": parsed.get("as_of") or "", "term": parsed.get("term") or dash.get("termName") or "",
             }
+            # Запоминаем, чтобы при лимите запросов у СГО показать эти данные,
+            # а не пустые списки.
+            state.remember(f"grades:lastgood:{term_id or 'current'}", payload)
+            _save_last_good_grades(term_id, payload)
+            return payload
         except Exception as e:
             traceback.print_exc()
             print(f"! grades_data({term_id=}) failed: {e}", file=sys.stderr)
             # Та же защита, что в results_by_term_data: для не текущего периода
             # не подставляем дашборд (он всегда про текущий триместр).
             is_future = bool(term_id and current_term_id and term_id != current_term_id)
+            if not is_future:
+                # Показываем последние удачные данные, а не пустые списки:
+                # СГО мог отклонить запрос отчёта (лимит на число запросов).
+                last = state.last_good(f"grades:lastgood:{term_id or 'current'}")
+                if last is None:
+                    last = _load_last_good_grades(term_id)
+                if last:
+                    data = dict(last)
+                    data["error"] = (
+                        f"Показаны последние полученные данные: {e}. "
+                        "Обновите их позже — СГО временно ограничивает число запросов."
+                    )
+                    data["stale"] = True
+                    return data
             return {
                 "subjects": [], "average": None, "marksCount": 0, "counts": {},
                 "attendance": {"items": [], "counts": {}, "total": 0, "available": False},
@@ -1146,6 +1245,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         with self.state.lock:
             self.state.reset()
             self.state.config = {}
+        try:
+            # Последние данные успеваемости — тоже учётная запись, удаляем.
+            path = _grades_cache_path()
+            if path.is_file():
+                path.unlink()
+        except OSError as exc:
+            self.log_message("grades cache remove failed: %s", exc)
         try:
             removed = core.clear_config()
             if removed:

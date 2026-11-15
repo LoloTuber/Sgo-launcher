@@ -23,6 +23,8 @@ KEY_NOTIFY_MARKS = "sgo.notifyMarks"
 KEY_NOTIFY_HOMEWORK = "sgo.notifyHomework"
 KEY_INTERVAL = "sgo.backgroundInterval"
 KEY_AUTOSTART = "sgo.autostart"
+# Пояснение для настроек: автозапуск указывает на удалённый файл или на другую копию.
+KEY_AUTOSTART_NOTE = "sgo.autostartNote"
 
 DEFAULT_INTERVAL_MIN = 10
 MIN_INTERVAL_MIN = 1

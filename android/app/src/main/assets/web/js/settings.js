@@ -150,6 +150,26 @@ export async function syncNativeSettings() {
   return changed;
 }
 
+/**
+ * Показывает пояснение о состоянии автозапуска.
+ *
+ * Запись автозапуска в Windows одна на приложение, поэтому он может быть
+ * настроен на другую копию или на уже удалённый файл. Нативная часть
+ * кладёт пояснение в настройки — показываем его под чекбоксом.
+ * Только для ПК: на Android этим текстом занимается app.js.
+ */
+export async function refreshAutostartNote() {
+  const hint = document.querySelector("#setting-autostart-hint");
+  if (!hint) return;
+  if (!window.pywebview?.api) return;
+  let note = "";
+  try {
+    note = (await storageGetNative("sgo.autostartNote")) || "";
+  } catch (_) { note = ""; }
+  hint.textContent = note;
+  hint.hidden = !note;
+}
+
 /** Проставляет текущие значения настроек в элементы модального окна. */
 export function applySettingsToControls() {
   const s = getSettings();
@@ -172,6 +192,8 @@ export function applySettingsToControls() {
 
   const interval = document.querySelector("#setting-interval");
   if (interval) interval.value = s.backgroundInterval;
+
+  refreshAutostartNote();
 }
 
 /**
@@ -181,6 +203,13 @@ export function applySettingsToControls() {
  */
 export function bindSettingsControls(onChange) {
   applySettingsToControls();
+
+  // При открытии окна настроек обновляем пояснение про автозапуск:
+  // к этому моменту нативный мост (ПК) уже готов.
+  const settingsBtn = document.querySelector("#settings-btn");
+  if (settingsBtn) {
+    settingsBtn.addEventListener("click", () => { refreshAutostartNote(); });
+  }
 
   const compact = document.querySelector("#setting-compact");
   const hideEmpty = document.querySelector("#setting-hide-empty");
@@ -260,6 +289,8 @@ export function bindSettingsControls(onChange) {
     autostart.addEventListener("change", () => {
       setSetting("autostart", autostart.checked);
       if (onChange) onChange("autostart", autostart.checked);
+      // После переключения нативная часть снимает пояснение — обновляем его.
+      setTimeout(() => { refreshAutostartNote(); }, 150);
     });
   }
 }

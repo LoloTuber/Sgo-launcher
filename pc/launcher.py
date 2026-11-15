@@ -87,6 +87,8 @@ class SettingsApi:
         """Включает/выключает автозапуск вместе с Windows."""
         ok = sgo_autostart.set_enabled(bool(enabled))
         sgo_settings.set_value(sgo_settings.KEY_AUTOSTART, "1" if ok and enabled else "0")
+        if ok:
+            sgo_settings.set_value(sgo_settings.KEY_AUTOSTART_NOTE, "")
         return ok
 
 
@@ -125,10 +127,53 @@ class AppController:
             self.tray.notifications_on = (
                 sgo_settings.notify_marks_enabled() or sgo_settings.notify_homework_enabled()
             )
-            self.tray.autostart_on = sgo_autostart.is_enabled()
         else:
             log.warning("Значок в трее недоступен — фоновая проверка будет без уведомлений")
             self.tray = None
+
+        self.check_autostart()
+
+    def check_autostart(self) -> None:
+        """Приводит автозапуск в соответствие с реальным состоянием.
+
+        Запись в реестре одна на имя «SgoDiary», поэтому запускаться может
+        только одна копия приложения. Если запись указывает на удалённый файл
+        (старую версию удалили или перенесли), перенастраиваем её на текущую
+        копию. Если автозапуск настроен на другую установленную версию —
+        не трогаем её, но предупреждаем пользователя в настройках.
+        """
+        if os.name != "nt":
+            return
+        try:
+            state = sgo_autostart.status()
+            wanted = sgo_settings.get_bool(sgo_settings.KEY_AUTOSTART, False)
+            if state["stale"] and wanted:
+                if sgo_autostart.repair():
+                    log.info("Автозапуск перенастроен на текущую версию")
+                    state = sgo_autostart.status()
+
+            # В настройках показываем правду, а не только флажок.
+            sgo_settings.set_value(
+                sgo_settings.KEY_AUTOSTART, "1" if state["enabled"] else "0"
+            )
+
+            note = ""
+            if state["stale"]:
+                note = (
+                    "В настройках Windows автозапуск указывает на удалённый файл. "
+                    "Включите его ещё раз — запустится эта версия."
+                )
+            elif state["other"]:
+                note = (
+                    "Сейчас автозапуск настроен на другую копию приложения "
+                    f"({state['path']}). Включите его, чтобы запускалась эта версия."
+                )
+            sgo_settings.set_value(sgo_settings.KEY_AUTOSTART_NOTE, note)
+
+            if self.tray:
+                self.tray.autostart_on = bool(state["enabled"])
+        except Exception:
+            log.exception("Не удалось проверить состояние автозапуска")
 
     def stop(self) -> None:
         if self.watcher:
@@ -176,6 +221,8 @@ class AppController:
         sgo_settings.set_value(
             sgo_settings.KEY_AUTOSTART, "1" if ok and enabled else "0"
         )
+        if ok:
+            sgo_settings.set_value(sgo_settings.KEY_AUTOSTART_NOTE, "")
         log.info("Автозапуск: %s", "вкл" if enabled else "выкл")
         # Окно должно показать новое состояние чекбокса.
         self.sync_web_settings()
