@@ -42,4 +42,11 @@ export const getSchedule = (weekIso) => {
 
 export const getAssignmentDetails = (id) => fetchJson(`/api/assignment/${encodeURIComponent(id)}`);
 
+/**
+ * Предзагрузка соседних недель дневника (сервер делает это в фоне).
+ * Сервер сам отвечает сразу, а данные кладёт в кэш.
+ */
+export const preloadDiary = (weeks = 2) =>
+  fetchJson(`/api/diary/preload?weeks=${encodeURIComponent(weeks)}`);
+
 export const postRefresh = () => fetch("/api/refresh", { method: "POST" }).catch(() => null);

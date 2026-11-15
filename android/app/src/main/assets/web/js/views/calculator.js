@@ -1,5 +1,7 @@
 import { state } from '../state.js';
 import { escapeHtml, shortDate, markCls, isDebtMark, markNumber } from '../utils.js';
+import { weightOf, WEIGHT_OPTIONS } from '../weights.js';
+import { storageGet, storageSet, storageRemove } from '../storage.js';
 
 /**
  * Калькулятор «что если».
@@ -9,11 +11,71 @@ import { escapeHtml, shortDate, markCls, isDebtMark, markNumber } from '../utils
  *  - превратить долг («.»/«-») в 3, 4 или 5;
  *  - добавить произвольное количество новых оценок с выбранным весом;
  *  - сразу увидеть, как изменится средний балл и итоговая отметка.
+ *
+ * Состояние симуляции (предмет, вес, правки и добавленные оценки) хранится
+ * в надёжном хранилище и переживает перезапуск приложения — в том числе
+ * в офлайне, когда оценки берутся из кэша.
  */
+
+const CALC_STATE_KEY = "sgo.calc.state";
 
 function resetSimulation() {
   state.simAdjustments = {};
   state.simAdded = [];
+}
+
+/** Восстанавливает сохранённое состояние калькулятора (после перезапуска). */
+export async function restoreCalcState() {
+  try {
+    const raw = await storageGet(CALC_STATE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== "object") return;
+
+    const weight = Number(saved.weight);
+    if (Number.isFinite(weight) && weight > 0) state.calcWeight = weight;
+    if (typeof saved.term === "string") state.calcTerm = saved.term;
+    if (typeof saved.subject === "string") state.calcSubject = saved.subject;
+    if (saved.adjustments && typeof saved.adjustments === "object") {
+      state.simAdjustments = saved.adjustments;
+    }
+    if (Array.isArray(saved.added)) {
+      state.simAdded = saved.added
+        .map((item) => ({
+          value: Number(item && item.value),
+          weight: Number(item && item.weight),
+        }))
+        .filter((item) => Number.isFinite(item.value) && item.value >= 2 && item.value <= 5
+          && Number.isFinite(item.weight) && item.weight > 0);
+    }
+  } catch (_) {
+    // Повреждённое состояние — просто начинаем с чистого листа.
+  }
+}
+
+/** Сохраняет состояние калькулятора между запусками. */
+function saveCalcState() {
+  try {
+    const payload = JSON.stringify({
+      term: state.calcTerm || "",
+      subject: state.calcSubject || "",
+      weight: state.calcWeight || 10,
+      adjustments: state.simAdjustments || {},
+      added: state.simAdded || [],
+    });
+    storageSet(CALC_STATE_KEY, payload);
+  } catch (_) {
+    // Хранилище недоступно — калькулятор продолжает работать без сохранения.
+  }
+}
+
+/** Сбрасывает сохранённое состояние (при выходе из аккаунта). */
+export async function clearCalcState() {
+  resetSimulation();
+  state.calcSubject = "";
+  try {
+    await storageRemove(CALC_STATE_KEY);
+  } catch (_) { /* ignore */ }
 }
 
 function numericValue(value) {
@@ -22,11 +84,6 @@ function numericValue(value) {
 
 function isDot(value) {
   return isDebtMark(value);
-}
-
-function weightOf(mark) {
-  const weight = Number(mark && mark.weight);
-  return Number.isFinite(weight) && weight > 0 ? weight : 1;
 }
 
 function clampMark(value) {
@@ -170,20 +227,23 @@ export function renderCalculator(data) {
   if (state.calcTerm !== term) {
     state.calcTerm = term;
     resetSimulation();
+    state.calcSubject = "";
   }
 
   if (!state.simAdjustments) state.simAdjustments = {};
   if (!Array.isArray(state.simAdded)) state.simAdded = [];
 
   if (weightSel) {
-    state.calcWeight = parseInt(weightSel.value, 10) || 10;
+    const savedWeight = parseInt(state.calcWeight, 10);
+    state.calcWeight = Number.isFinite(savedWeight) && savedWeight > 0 ? savedWeight : 10;
+    weightSel.value = String(state.calcWeight);
     weightSel.onchange = () => {
       state.calcWeight = parseInt(weightSel.value, 10) || 10;
       calcSubject(sel.value);
     };
   }
 
-  const saved = sel.value;
+  const saved = state.calcSubject || sel.value;
   sel.innerHTML = data.subjects
     .map((subject) => `<option value="${escapeHtml(subject.name)}">${escapeHtml(subject.name)}</option>`)
     .join("");
@@ -192,10 +252,12 @@ export function renderCalculator(data) {
   }
 
   sel.onchange = () => {
+    state.calcSubject = sel.value;
     resetSimulation();
     calcSubject(sel.value);
   };
 
+  state.calcSubject = sel.value;
   calcSubject(sel.value);
 }
 
@@ -203,6 +265,8 @@ export function calcSubject(subjectName) {
   const data = state.grades;
   const content = document.querySelector("#calc-content");
   if (!data || !content) return;
+
+  state.calcSubject = subjectName;
 
   const subject = (data.subjects || []).find((item) => item.name === subjectName);
   if (!subject) {
@@ -308,7 +372,7 @@ export function calcSubject(subjectName) {
     </div>
   `).join("");
 
-  const weightOptions = [1, 5, 10, 15, 20, 30]
+  const weightOptions = WEIGHT_OPTIONS
     .map((weight) => `<option value="${weight}" ${weight === state.calcWeight ? "selected" : ""}>Вес ${weight}</option>`)
     .join("");
 
@@ -435,4 +499,7 @@ export function calcSubject(subjectName) {
       calcSubject(subjectName);
     });
   }
+
+  // Любое изменение симуляции сразу сохраняем на диск.
+  saveCalcState();
 }

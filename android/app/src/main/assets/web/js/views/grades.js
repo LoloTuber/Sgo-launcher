@@ -1,4 +1,4 @@
-import { escapeHtml, shortDate, markCls } from '../utils.js';
+import { escapeHtml, shortDate, markCls, formatAverage } from '../utils.js';
 import { isNewMark, newMarksCount } from '../changes.js';
 
 export function renderGrades(data) {
@@ -9,7 +9,7 @@ export function renderGrades(data) {
 
   const counts = data.counts || {};
   const summary = [
-    `<span class="chip">Средний балл <b>${data.average != null ? String(data.average).replace(".", ",") : "—"}</b></span>`,
+    `<span class="chip" title="Считается с учётом весов оценок (10/15/20/30), долг — как «2»">Средний балл <b>${formatAverage(data.average)}</b></span>`,
     `<span class="chip">Оценок <b>${data.marksCount || 0}</b></span>`,
   ];
   if (fresh) summary.push(`<span class="chip chip-new">Новых <b>${fresh}</b></span>`);
@@ -65,7 +65,7 @@ export function renderGrades(data) {
             </div>
           `).join("")}
         </div>
-        <p style="font-size:12px;color:var(--red);margin-top:12px;opacity:0.8;">* Эти оценки не учитываются в среднем балле, но их нужно исправить.</p>
+        <p style="font-size:12px;color:var(--red);margin-top:12px;opacity:0.8;">* Долг учитывается в среднем балле как «2» (с весом задания), но его нужно исправить.</p>
       </div>
     `;
   }
@@ -86,7 +86,7 @@ export function renderGrades(data) {
       }).join("");
 
       const avg = subj.average != null
-        ? `<span class="badge">${String(subj.average).replace(".", ",")}</span>` : "";
+        ? `<span class="badge">${formatAverage(subj.average)}</span>` : "";
       return `<article class="subject">
         <div class="subject-head">
           <h3>${escapeHtml(subj.name)}</h3>
@@ -128,20 +128,40 @@ export function renderResults(results) {
     return;
   }
 
-  // Сортируем по убыванию балла
-  subjects.sort((a, b) => b.average - a.average);
-
   // --- Вспомогательные ---
   const clampMark = (v) => Math.max(2, Math.min(5, Math.round(v)));
-  const fmt = (v) => String(v).replace(".", ",").slice(0, 4);
+  const fmt = (v) => formatAverage(v);
+
+  // Что показываем по предмету: выведенная оценка (если СГО её вывел),
+  // иначе средняя за период.
+  const shownValue = (s) => (mode === "current" && s.final != null ? s.final : s.average);
+
+  // Сортируем по убыванию показанного балла
+  subjects.sort((a, b) => Number(shownValue(b)) - Number(shownValue(a)));
 
   // Распределение по округлённым отметкам
   const distribution = { 5: 0, 4: 0, 3: 0, 2: 0 };
-  subjects.forEach((s) => distribution[clampMark(s.average)]++);
+  subjects.forEach((s) => distribution[clampMark(shownValue(s))]++);
 
-  // ИСПРАВЛЕНИЕ: Всегда считаем средний балл сами на основе видимых предметов,
-  // чтобы избежать расхождений с бэкендом СГО (когда предметов 18, а оценок 17).
-  let commonAvg = subjects.reduce((sum, s) => sum + s.average, 0) / subjects.length;
+  // Общий балл считаем сами, но теперь с учётом весов оценок (10/15/20/30):
+  // вес предмета — сумма весов его оценок, долг входит как «2».
+  // Средние из СГО (subject.average) при этом не трогаем — они остаются как есть.
+  const weightedSubjects = subjects.filter(
+    (s) => s.weightedAverage != null && Number(s.weight) > 0,
+  );
+  let commonAvg;
+  if (weightedSubjects.length) {
+    let sum = 0;
+    let weights = 0;
+    for (const s of weightedSubjects) {
+      sum += Number(s.weightedAverage) * Number(s.weight);
+      weights += Number(s.weight);
+    }
+    commonAvg = sum / weights;
+  } else {
+    // Весов нет (например, данные только из дашборда) — считаем как раньше.
+    commonAvg = subjects.reduce((sum, s) => sum + s.average, 0) / subjects.length;
+  }
 
   // Цвет и подпись для общего балла
   let avgColor = "#10b981";
@@ -173,6 +193,7 @@ export function renderResults(results) {
         <div class="results-circle-inner">
           <div class="results-circle-value" style="color:${avgColor}">${fmt(commonAvg)}</div>
           <div class="results-circle-label">${avgLabel}</div>
+          <div class="result-note">с учётом весов</div>
         </div>
       </div>
       <div class="results-stats">
@@ -202,8 +223,13 @@ export function renderResults(results) {
   `;
 
   const rows = subjects.map((s, index) => {
-    const pctBar = Math.max(0, Math.min(100, (s.average / 5) * 100)).toFixed(1);
-    const level = clampMark(s.average);
+    // Что показываем по предмету: выведенную оценку, если СГО её уже вывел,
+    // иначе — среднюю за период. Так понятно, что именно выведено в триместре.
+    const hasFinal = mode === "current" && s.final != null;
+    const value = shownValue(s);
+
+    const pctBar = Math.max(0, Math.min(100, (Number(value) / 5) * 100)).toFixed(1);
+    const level = clampMark(value);
 
     let medal;
     if (index === 0) medal = `<span class="result-medal">🥇</span>`;
@@ -211,12 +237,12 @@ export function renderResults(results) {
     else if (index === 2) medal = `<span class="result-medal">🥉</span>`;
     else medal = `<span class="result-medal result-medal-num">${index + 1}</span>`;
 
-    // В режиме «триместр» показываем подсказку с годовой, если она уже есть.
+    // Подпись под оценкой: что именно показано и сколько оценок за период.
     let extra = "";
-    if (mode === "current" && s.final != null) {
-      extra = `<small class="result-note">годовая ${String(s.final).replace(".", ",")}</small>`;
-    } else if (mode === "current" && s.marksCount) {
-      extra = `<small class="result-note">${s.marksCount} оц.</small>`;
+    if (mode === "current") {
+      const label = hasFinal ? "выведенная" : "средняя за период";
+      const count = s.marksCount ? ` · ${s.marksCount} оц.` : "";
+      extra = `<small class="result-note">${label}${count}</small>`;
     }
 
     return `
@@ -225,7 +251,7 @@ export function renderResults(results) {
         <div class="result-main">
           <div class="result-name-row">
             <span class="result-name">${escapeHtml(s.name)}</span>
-            <span class="result-score">${fmt(s.average)}</span>
+            <span class="result-score">${fmt(value)}</span>
           </div>
           <div class="result-bar">
             <div class="result-bar-fill level-${level}"
@@ -257,6 +283,13 @@ export function renderAttendance(data) {
   const list = document.querySelector("#att-list");
   const items = att.items || [];
   if (!items.length) {
+    // Пустой список бывает двух видов: «пропусков нет» (отчёт разобран)
+    // и «данных нет» (отчёт не пришёл/не разобрался). Не путаем их.
+    if (att.available === false || data.error) {
+      const reason = data.error ? escapeHtml(data.error) : "Посещаемость не удалось получить.";
+      list.innerHTML = `<div class="empty"><strong>Нет данных</strong>${reason}</div>`;
+      return;
+    }
     list.innerHTML = `<div class="empty"><strong>Пропусков нет</strong>Посещаемость без замечаний.</div>`;
     return;
   }

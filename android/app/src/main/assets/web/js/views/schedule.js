@@ -3,7 +3,7 @@ import { getSettings } from '../settings.js';
 import { isDayChanged } from '../changes.js';
 import {
   BELLS_40_MON, BELLS_30_MON, BELLS_40_OTH, BELLS_30_OTH,
-  escapeHtml, shortDate, getTimeInMinutes, localIsoDate, isImportantTalkSubject
+  escapeHtml, shortDate, getTimeInMinutes, localIsoDate, addDaysIso, isImportantTalkSubject
 } from '../utils.js';
 
 const WEEKDAYS = [
@@ -34,18 +34,36 @@ function saveNote(date, text) {
   if (state.schedule) renderScheduleData(state.schedule);
 }
 
+/**
+ * Открывает существующее редактирование заметки «к какому уроку прийти».
+ * Используется и на вкладке «Расписание», и на экране «Сегодня».
+ */
+export function editScheduleNote(date) {
+  const currentNote = getNotes()[date] || "";
+  const newNote = prompt(
+    "К какому уроку прийти? (Введите номер, например 3, или диапазон 3-5):",
+    currentNote
+  );
+  if (newNote === null) return false;
+  saveNote(date, newNote.trim());
+  return true;
+}
+
 function bellsFor(isMonday) {
   if (state.isShortDay) return isMonday ? BELLS_30_MON : BELLS_30_OTH;
   return isMonday ? BELLS_40_MON : BELLS_40_OTH;
 }
 
 /**
- * Готовит день к показу: добавляет «Разговоры о важном» в понедельник,
- * убирает их из остальных дней, сортирует уроки и подставляет время звонков.
+ * Готовит день к показу: добавляет «Разговоры о важном» нулевым уроком
+ * только в понедельник, убирает их из остальных дней, сортирует уроки
+ * и подставляет время звонков.
  */
 function isImportantTalk(lesson) {
   return isImportantTalkSubject(lesson && lesson.subject);
 }
+
+const IMPORTANT_TALK_SUBJECT = "Разговоры о важном";
 
 function prepareDay(day) {
   if (!day) return null;
@@ -53,17 +71,25 @@ function prepareDay(day) {
   const isMonday = String(day.weekday || "").toLowerCase() === "понедельник";
   let lessons = JSON.parse(JSON.stringify(day.lessons || []));
 
+  // «Разговоры о важном» — это нулевой урок и только по понедельникам.
+  // Сначала убираем предмет из любого дня и с любого номера, затем в
+  // понедельник нормализуем его в номер 0 (или добавляем, если его нет).
+  const talkLesson = lessons.find((lesson) => isImportantTalk(lesson));
+  lessons = lessons.filter((lesson) => !isImportantTalk(lesson));
+
   if (isMonday) {
-    if (!lessons.some((lesson) => lesson.number === 0 || isImportantTalk(lesson))) {
-      lessons.push({ number: 0, subject: "Разговоры о важном" });
+    const zeroLesson = lessons.find((lesson) => Number(lesson.number) === 0);
+    if (zeroLesson) {
+      zeroLesson.subject = IMPORTANT_TALK_SUBJECT;
+    } else {
+      lessons.push({
+        number: 0,
+        subject: IMPORTANT_TALK_SUBJECT,
+        ...(talkLesson && (talkLesson.start || talkLesson.end)
+          ? { start: talkLesson.start, end: talkLesson.end }
+          : {}),
+      });
     }
-    const zeroIndex = lessons.findIndex(
-      (lesson) => lesson.number === 9 && isImportantTalk(lesson)
-    );
-    if (zeroIndex !== -1) lessons.splice(zeroIndex, 1);
-  } else {
-    // По правилам «Разговоры о важном» бывают только в понедельник.
-    lessons = lessons.filter((lesson) => !isImportantTalk(lesson));
   }
 
   lessons.sort((a, b) => a.number - b.number);
@@ -79,6 +105,44 @@ function prepareDay(day) {
   }
 
   return { ...day, isMonday, lessons, bells };
+}
+
+/**
+ * Ближайший учебный день после указанной даты (в пределах загруженной недели).
+ * Нужен экрану «Сегодня», когда на сегодня уроков нет.
+ */
+export function getNextSchoolDay(fromIso = localIsoDate()) {
+  const schedule = state.schedule;
+  if (!schedule || !Array.isArray(schedule.days)) return null;
+
+  // На выходных ближайший учебный день может быть уже в следующей неделе.
+  const days = schedule.days.concat(
+    state.nextSchedule && Array.isArray(state.nextSchedule.days) ? state.nextSchedule.days : []
+  );
+  const byDate = new Map(days.map((day) => [day.date, day]));
+  const notes = getNotes();
+
+  for (let offset = 1; offset <= 10; offset += 1) {
+    const iso = addDaysIso(fromIso, offset);
+    const rawDay = byDate.get(iso);
+    if (!rawDay) continue;
+
+    const day = prepareDay(rawDay);
+    if (!day) continue;
+
+    const note = notes[iso] || "";
+    const hasLessons = day.lessons.some((lesson) => String(lesson.subject || "").trim());
+    if (!hasLessons && !note) continue;
+
+    return {
+      ...day,
+      note,
+      offset,
+      isTomorrow: offset === 1,
+    };
+  }
+
+  return null;
 }
 
 export function formatLeft(minutes) {
@@ -269,6 +333,11 @@ function renderNote(note, bells) {
   return `📍 Прийти к ${start}-му уроку`;
 }
 
+/** Человекочитаемая заметка к расписанию — для карточки «Сегодня». */
+export function formatScheduleNote(note, bells) {
+  return renderNote(note, bells);
+}
+
 export function renderScheduleData(data) {
   const list = document.querySelector("#schedule-content");
   if (!list) return;
@@ -283,10 +352,44 @@ export function renderScheduleData(data) {
     days = days.filter((day) => day.date === todayIso);
   }
 
-  if (!days.length) {
-    const message = settings.todayOnly
-      ? "Сегодня уроков нет — по настройкам показывается только текущий день."
-      : "На эту неделю расписания нет.";
+  // Сначала готовим дни и сразу отбрасываем полностью пустые.
+  // День остаётся, только если в нём есть хотя бы один урок с названием
+  // или заметка «прийти к N-му уроку». Выходные и пустые дни не создают
+  // карточку «Уроков нет».
+  const preparedDays = days.map((rawDay) => {
+    const day = prepareDay(rawDay);
+    if (!day) return null;
+
+    const note = notes[day.date] || "";
+    let lessons = day.lessons;
+    const hasRealLessons = lessons.some((lesson) => String(lesson.subject || "").trim());
+
+    if (!hasRealLessons && !note) return null;
+    if (!hasRealLessons) {
+      // Заметка есть, а уроков нет — показываем только заметку,
+      // без пустого списка и пустых строк «—».
+      lessons = [];
+    } else if (settings.hideEmptyLessons) {
+      lessons = lessons.filter((lesson) => String(lesson.subject || "").trim());
+    }
+
+    return {
+      day,
+      note,
+      lessons,
+      changed: isDayChanged(day.date),
+    };
+  }).filter(Boolean);
+
+  if (!preparedDays.length) {
+    let message;
+    if (settings.todayOnly) {
+      message = "Сегодня уроков нет — по настройкам показывается только текущий день.";
+    } else if (days.length) {
+      message = "На этой неделе уроков нет.";
+    } else {
+      message = "На эту неделю расписания нет.";
+    }
     list.innerHTML = `<div class="empty"><strong>Нет уроков</strong>${message}</div>`;
     updateScheduleStatus();
     return;
@@ -295,19 +398,7 @@ export function renderScheduleData(data) {
   list.innerHTML = `
     ${settings.todayOnly ? `<div class="schedule-filter-note">Показан только сегодняшний день</div>` : ""}
     <div class="schedule-grid">
-      ${days.map((rawDay) => {
-        const day = prepareDay(rawDay);
-        if (!day) return "";
-
-        let lessons = day.lessons;
-        if (settings.hideEmptyLessons) {
-          lessons = lessons.filter((lesson) => String(lesson.subject || "").trim());
-        }
-
-        const note = notes[day.date] || "";
-        if (!lessons.length && !note) return "";
-
-        const changed = isDayChanged(day.date);
+      ${preparedDays.map(({ day, note, lessons, changed }) => {
         const displayNote = renderNote(note, day.bells);
 
         return `
@@ -320,19 +411,21 @@ export function renderScheduleData(data) {
               </span>
             </div>
             ${displayNote ? `<div class="schedule-note">${escapeHtml(displayNote)}</div>` : ""}
-            <div class="schedule-lessons">
-              ${lessons.map((lesson) => `
-                  <div class="schedule-item ${lesson.number === 0 ? "sch-zero" : ""}"
-                       data-date="${day.date}" data-lesson="${lesson.number}">
-                    <div class="sch-num">${lesson.number}</div>
-                    <div class="sch-subject">${escapeHtml(lesson.subject || "—")}</div>
-                    <div class="sch-time">
-                      <span>${escapeHtml(lesson.timeLabel)}</span>
-                      <span class="sch-left" hidden></span>
+            ${lessons.length ? `
+              <div class="schedule-lessons">
+                ${lessons.map((lesson) => `
+                    <div class="schedule-item ${lesson.number === 0 ? "sch-zero" : ""}"
+                         data-date="${day.date}" data-lesson="${lesson.number}">
+                      <div class="sch-num">${lesson.number}</div>
+                      <div class="sch-subject">${escapeHtml(lesson.subject || "—")}</div>
+                      <div class="sch-time">
+                        <span>${escapeHtml(lesson.timeLabel)}</span>
+                        <span class="sch-left" hidden></span>
+                      </div>
                     </div>
-                  </div>
-                `).join("")}
-            </div>
+                  `).join("")}
+              </div>
+            ` : ""}
           </div>
         `;
       }).join("")}
@@ -340,15 +433,7 @@ export function renderScheduleData(data) {
   `;
 
   list.querySelectorAll(".btn-edit-note").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const date = btn.dataset.date;
-      const currentNote = getNotes()[date] || "";
-      const newNote = prompt(
-        "К какому уроку прийти? (Введите номер, например 3, или диапазон 3-5):",
-        currentNote
-      );
-      if (newNote !== null) saveNote(date, newNote.trim());
-    });
+    btn.addEventListener("click", () => editScheduleNote(btn.dataset.date));
   });
 
   updateScheduleStatus();

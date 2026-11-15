@@ -251,7 +251,48 @@ NOT_ABSENCE_CODES = {"ОСВ", "ОП"}
 
 # Обновленный парсер: теперь понимает точки и дефисы (пересдачи)
 _MARK_RE = re.compile(r"^(\d+([.,]\d+)?|[.\-])$")
-_TOKEN_RE = re.compile(r"\S+")
+
+# Пробелы в отчёте СГО — обычные, неразрывные (nbsp), узкие и т.п.
+# В Python \s в unicode-режиме уже покрывает их, но явно нормализуем,
+# чтобы разбор совпадал с Kotlin-парсером на Android.
+_CELL_SPACE_RE = re.compile(r"[\s\u00a0\u202f\u2007\u2009\u200b]+")
+# Числовая часть токена: «5», «4», «3,5» — выделяется из слипшихся «5Н».
+_NUM_PART_RE = re.compile(r"(\d+(?:[.,]\d+)?)")
+# Коды пропусков в разных написаниях приводим к одному виду.
+_CODE_ALIASES = {
+    "Н": "Н", "НП": "НП",
+    "УП": "УП",
+    "Б": "Б", "БК": "Б",
+    "ОТ": "ОТ", "ОП": "ОП", "ОСВ": "ОСВ",
+}
+
+
+def _split_cell_tokens(value: str) -> List[str]:
+    """Разбивает содержимое ячейки на токены оценок и кодов пропусков.
+
+    Отчёт СГО пишет в одной ячейке и оценку, и код пропуска, причём они
+    могут быть разделены обычным пробелом, неразрывным пробелом (&nbsp;)
+    или вообще идти слитно («5Н»). Поэтому сначала нормализуем пробелы,
+    потом режем слипшиеся токены на числовую и буквенную части.
+    """
+    text = _CELL_SPACE_RE.sub(" ", value or "").strip()
+    if not text:
+        return []
+    tokens: List[str] = []
+    for raw in text.split(" "):
+        if not raw:
+            continue
+        for part in _NUM_PART_RE.split(raw):
+            part = part.strip()
+            if part:
+                tokens.append(part)
+    return tokens
+
+
+def _normalize_attendance_code(token: str) -> str:
+    """«н.п.» / «Б/К» / «НП» → канонический код пропуска."""
+    raw = re.sub(r"[^0-9A-Za-z\u0410-\u042f\u0430-\u044f\u0401\u0451]+", "", token).upper()
+    return _CODE_ALIASES.get(raw, raw)
 
 def _cell_text(html_fragment: str) -> str:
     text = re.sub(r"<br\s*/?>", " ", html_fragment, flags=re.I)
@@ -377,11 +418,13 @@ def parse_student_total(html: str) -> Dict[str, Any]:
             value = cell["text"].strip()
             if not value: continue
             date = days[index]
-            for token in _TOKEN_RE.findall(value):
+            for token in _split_cell_tokens(value):
                 if _MARK_RE.match(token):
                     marks.append({"date": date, "value": token.replace(",", ".")})
-                elif token.upper() in ATTENDANCE_CODES or token.isalpha():
-                    absences.append({"date": date, "code": token})
+                    continue
+                code = _normalize_attendance_code(token)
+                if code and code.isalpha() and len(code) <= 4:
+                    absences.append({"date": date, "code": code})
         average = ""
         final = ""
         tail = cells[len(days):]

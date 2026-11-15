@@ -98,15 +98,16 @@ internal fun SgoClient.enrichGradesWithWeights(grades: JSONObject) {
         start = termStart.take(10)
         end = termEnd.take(10)
     }
-    if (start.length != 10 || end.length != 10) return
 
-    val entries = fetchWeightEntries(start, end)
-    if (entries.isEmpty()) return
-
+    // Индекс весов из дневника. Если дневник недоступен — считаем с весом 1,
+    // но собственное взвешенное среднее всё равно посчитаем.
     val index = mutableMapOf<String, MutableList<MarkWeight>>()
-    for (entry in entries) {
-        index.getOrPut(weightKey(entry.subject, entry.date, entry.value)) { mutableListOf() }
-            .add(entry.info)
+    if (start.length == 10 && end.length >= 10) {
+        val entries = fetchWeightEntries(start, end)
+        for (entry in entries) {
+            index.getOrPut(weightKey(entry.subject, entry.date, entry.value)) { mutableListOf() }
+                .add(entry.info)
+        }
     }
 
     val subjects = grades.optJSONArray("subjects") ?: return
@@ -132,15 +133,24 @@ internal fun SgoClient.enrichGradesWithWeights(grades: JSONObject) {
                 if (info.id > 0) mark.put("id", info.id)
                 if (info.type.isNotEmpty()) mark.put("type", info.type)
             }
-            val value = mark.optString("value").replace(',', '.').toDoubleOrNull() ?: continue
-            if (value <= 0) continue
-            val weight = mark.optInt("weight", 1)
+            // Долг («.»/«-») в расчёте среднего равен «2».
+            val value = markNumber(mark.optString("value")) ?: continue
+            val weight = mark.optInt("weight", 1).coerceAtLeast(1)
             sum += value * weight
             weightSum += weight
             totalWeighted += value * weight
             totalWeight += weight
         }
-        if (weightSum > 0) subject.put("average", round2(sum / weightSum))
+        if (weightSum > 0) {
+            val weighted = round2(sum / weightSum)
+            // Собственное взвешенное среднее — отдельным полем.
+            subject.put("weightedAverage", weighted)
+            // «Вес» предмета — сумма весов его оценок.
+            subject.put("weight", weightSum)
+            // Среднее из СГО (termAverage) не перезаписываем.
+            // Если его нет — показываем собственное взвешенное.
+            if (subject.optString("termAverage").isEmpty()) subject.put("average", weighted)
+        }
     }
 
     if (totalWeight > 0) grades.put("average", round2(totalWeighted / totalWeight))

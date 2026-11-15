@@ -6,12 +6,34 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Успеваемость за период.
+ *
+ * Сборка за термин — это десятки запросов к СГО (отчёт + недели дневника),
+ * поэтому результат кэшируем на 10 минут: повторные переходы на вкладку
+ * «Успеваемость» / «Посещаемость» / «Аналитика» не тормозят интерфейс.
+ */
 internal fun SgoClient.getGradesJson(termId: String? = null): String {
+    val cacheKey = "grades:${termId ?: "current"}"
+    synchronized(jsonCache) {
+        val cached = jsonCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < DATA_CACHE_TTL) {
+            Log.i("SGO_GRADES", "Кэш успеваемости: $cacheKey")
+            return cached.second
+        }
+    }
+    val result = buildGradesJson(termId)
+    synchronized(jsonCache) { jsonCache[cacheKey] = Pair(System.currentTimeMillis(), result) }
+    return result
+}
+
+private fun SgoClient.buildGradesJson(termId: String?): String {
     val html = try {
         getStudentTotalHtml(termId)
     } catch (e: AuthExpiredException) {
         throw e
     } catch (e: Exception) {
+        Log.w("SGO_GRADES", "Отчёт StudentTotal недоступен: ${e.message}")
         null
     }
     if (html != null) {
@@ -27,6 +49,8 @@ internal fun SgoClient.getGradesJson(termId: String? = null): String {
                 }
                 return parsed.toString()
             }
+        } catch (e: AuthExpiredException) {
+            throw e
         } catch (e: Exception) { }
     }
     return getGradesJsonFallback(termId)
@@ -92,19 +116,23 @@ internal fun SgoClient.getGradesJsonFallback(termId: String? = null): String {
                                 put("weight", 1)
                             }
                             subjectsMap.getOrPut(subj) { mutableListOf() }.add(mJson)
-                            if (num != null) {
-                                totalMarks++; allWeighted += num; allWeight += 1
-                                if (counts.containsKey(valStr)) counts[valStr] = counts[valStr]!! + 1
+                            // Долг («.»/«-») считаем как «2» — с весом 1 у этой отметки.
+                            val numeric = markNumber(valStr)
+                            if (numeric != null) {
+                                totalMarks++; allWeighted += numeric; allWeight += 1
+                                if (num != null && counts.containsKey(valStr)) counts[valStr] = counts[valStr]!! + 1
                             }
                         } else {
-                            val code = valStr.uppercase()
-                            val isCounted = !NOT_ABSENCE_CODES.contains(code)
-                            absences.put(JSONObject().apply {
-                                put("date", markDate); put("code", code)
-                                put("label", ATTENDANCE_CODES[code] ?: code)
-                                put("subject", subj); put("counted", isCounted)
-                            })
-                            if (isCounted) absentCounts[code] = (absentCounts[code] ?: 0) + 1
+                            val code = normalizeAttendanceCode(valStr)
+                            if (code.isNotEmpty() && code.length <= 4 && code.all { it.isLetter() }) {
+                                val isCounted = !NOT_ABSENCE_CODES.contains(code)
+                                absences.put(JSONObject().apply {
+                                    put("date", markDate); put("code", code)
+                                    put("label", ATTENDANCE_CODES[code] ?: code)
+                                    put("subject", subj); put("counted", isCounted)
+                                })
+                                if (isCounted) absentCounts[code] = (absentCounts[code] ?: 0) + 1
+                            }
                         }
                     }
                 }
@@ -129,9 +157,11 @@ internal fun SgoClient.getGradesJsonFallback(termId: String? = null): String {
                                 put("id", a.optInt("id", 0))
                             }
                             subjectsMap.getOrPut(subj) { mutableListOf() }.add(mJson)
-                            if (num != null) {
-                                totalMarks++; allWeighted += num * weight; allWeight += weight
-                                if (counts.containsKey(valStr)) counts[valStr] = counts[valStr]!! + 1
+                            // Долг («.»/«-») считаем как «2» с весом задания.
+                            val numeric = markNumber(valStr)
+                            if (numeric != null) {
+                                totalMarks++; allWeighted += numeric * weight; allWeight += weight
+                                if (num != null && counts.containsKey(valStr)) counts[valStr] = counts[valStr]!! + 1
                             }
                         }
                     }
@@ -154,16 +184,19 @@ internal fun SgoClient.getGradesJsonFallback(termId: String? = null): String {
         marks.sortByDescending { it.optString("date") }
         var sum = 0.0; var wSum = 0
         for (m in marks) {
-            val v = m.optDouble("value")
-            if (v > 0) {
-                sum += v * m.optInt("weight", 1)
-                wSum += m.optInt("weight", 1)
-            }
+            val v = markNumber(m.optString("value")) ?: continue
+            val w = m.optInt("weight", 1).coerceAtLeast(1)
+            sum += v * w
+            wSum += w
         }
+        val weighted = if (wSum > 0) round2(sum / wSum) else 0.0
         subjsArr.put(JSONObject().apply {
             put("name", name)
             put("marks", JSONArray(marks))
-            put("average", if (wSum > 0) round2(sum / wSum) else 0.0)
+            put("average", weighted)
+            // Собственное взвешенное среднее и «вес» предмета (сумма весов оценок).
+            put("weightedAverage", weighted)
+            put("weight", wSum)
             put("count", marks.size)
         })
     }
@@ -173,6 +206,9 @@ internal fun SgoClient.getGradesJsonFallback(termId: String? = null): String {
     attJson.put("items", absences)
     attJson.put("counts", JSONObject(absentCounts as Map<*, *>))
     attJson.put("total", absentCounts.values.sum())
+    // Это запасной путь (дневник вместо отчёта СГО) — коды пропусков он не даёт,
+    // поэтому честно говорим, что данных о посещаемости нет.
+    attJson.put("available", false)
     response.put("attendance", attJson)
     return response.toString()
 }

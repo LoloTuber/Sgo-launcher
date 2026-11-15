@@ -1,11 +1,14 @@
 import { state } from '../state.js';
 import {
-  escapeHtml, shortDate, markCls, localIsoDate, addDaysIso, capitalize,
-  isImportantTalkSubject,
+  escapeHtml, shortDate, markCls, localIsoDate, addDaysIso, capitalize, toast,
+  isImportantTalkSubject, formatAverage,
 } from '../utils.js';
-import { getScheduleNow, formatLeft } from './schedule.js';
 import {
-  isNewMark, isNewHomework, isDayChanged,
+  getScheduleNow, getNextSchoolDay, editScheduleNote, formatScheduleNote, formatLeft,
+} from './schedule.js';
+import { subjectAverage } from '../weights.js';
+import {
+  isNewMark, isNewHomework, isDayChanged, markAllRead,
   newMarksCount, newHomeworkCount, changedDaysCount,
 } from '../changes.js';
 
@@ -36,6 +39,60 @@ function uniqueTasks(tasks) {
   return result;
 }
 
+function lessonWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "урок";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "урока";
+  return "уроков";
+}
+
+function scheduleActions(date) {
+  return `<div class="today-card-actions">
+    <button class="btn-edit-note" type="button" data-edit-note="${escapeHtml(date)}" title="Изменить расписание">✏️</button>
+    ${goButton("schedule", "Вся неделя")}
+  </div>`;
+}
+
+/** Если сегодня уроков нет — показываем ближайший учебный день. */
+function nextDayScheduleCard(info) {
+  const next = getNextSchoolDay(localIsoDate());
+  if (!next) {
+    return `
+      <article class="today-card today-schedule-card">
+        <div class="today-card-head"><h3>Расписание</h3>${scheduleActions(localIsoDate())}</div>
+        <div class="today-now is-done"><strong>${escapeHtml(info && info.html || "На сегодня уроков нет.")}</strong></div>
+        <div class="today-muted">Расписание на следующий учебный день пока не загружено.</div>
+      </article>
+    `;
+  }
+
+  const title = next.isTomorrow ? "Завтра" : `${next.weekday}, ${shortDate(next.date)}`;
+  const lessons = next.lessons.filter((lesson) => String(lesson.subject || "").trim());
+  const note = next.note ? formatScheduleNote(next.note, next.bells) : "";
+
+  return `
+    <article class="today-card today-schedule-card today-next-day ${isDayChanged(next.date) ? "is-changed" : ""}">
+      <div class="today-card-head">
+        <h3>Расписание · ${escapeHtml(title)}</h3>
+        ${scheduleActions(next.date)}
+      </div>
+      <div class="today-now is-next">
+        <span class="today-now-label">Сегодня уроков нет</span>
+        <strong>${escapeHtml(title)} · ${lessons.length} ${lessonWord(lessons.length)}</strong>
+        <span class="today-now-meta">${escapeHtml(shortDate(next.date))}${lessons[0] ? ` · начало в ${escapeHtml(lessons[0].timeLabel)}` : ""}</span>
+      </div>
+      ${lessons.length ? `<div class="today-lessons">${lessons.map((lesson) => `
+        <div class="today-lesson">
+          <span class="today-lesson-num">${lesson.number}</span>
+          <span class="today-lesson-subject">${escapeHtml(lesson.subject || "—")}</span>
+          <span class="today-lesson-time">${escapeHtml(lesson.timeLabel)}</span>
+        </div>`).join("")}</div>` : ""}
+      ${note ? `<div class="today-note">${escapeHtml(note)}</div>` : ""}
+    </article>
+  `;
+}
+
 function scheduleCard(info) {
   if (!info || info.status === "no-data") {
     return `
@@ -44,6 +101,11 @@ function scheduleCard(info) {
         <div class="skeleton"></div>
       </article>
     `;
+  }
+
+  // На сегодня уроков нет (или воскресенье) — показываем ближайший день.
+  if (info.status === "no-lessons" || info.status === "sunday") {
+    return nextDayScheduleCard(info);
   }
 
   let headline = "";
@@ -84,15 +146,17 @@ function scheduleCard(info) {
       `).join("")}</div>`
     : "";
 
+  const note = info.note ? formatScheduleNote(info.note, info.day && info.day.bells) : "";
+
   return `
     <article class="today-card today-schedule-card ${isDayChanged(todayIso) ? "is-changed" : ""}">
       <div class="today-card-head">
         <h3>Расписание</h3>
-        ${goButton("schedule", "Вся неделя")}
+        ${scheduleActions(todayIso)}
       </div>
       ${headline}
       ${lessons}
-      ${info.note ? `<div class="today-note">📍 ${escapeHtml(info.note)}</div>` : ""}
+      ${note ? `<div class="today-note">${escapeHtml(note)}</div>` : ""}
     </article>
   `;
 }
@@ -252,8 +316,11 @@ function attentionCard() {
         debts.push({ subject: subject.name, mark });
       }
     });
-    if (subject.average != null && Number(subject.average) < 3.5) {
-      risky.push({ name: subject.name, average: subject.average });
+    // Средние из СГО весов не учитывают, поэтому риск считаем сами:
+    // взвешенное среднее по оценкам предмета (долг = 2).
+    const ownAverage = subjectAverage(subject);
+    if (ownAverage != null && ownAverage < 3.5) {
+      risky.push({ name: subject.name, average: ownAverage });
     }
   }
 
@@ -284,7 +351,7 @@ function attentionCard() {
       ${risky.length ? `
         <div class="today-attention-title">Средний ниже 3,5</div>
         <div class="today-risk-chips">
-          ${risky.map((item) => `<span class="today-risk-chip">${escapeHtml(item.name)} · ${String(item.average).replace(".", ",")}</span>`).join("")}
+          ${risky.map((item) => `<span class="today-risk-chip">${escapeHtml(item.name)} · ${formatAverage(item.average)}</span>`).join("")}
         </div>
       ` : ""}
     </article>
@@ -308,6 +375,7 @@ export function renderToday() {
         ${freshMarks ? `<span>✦ Новых оценок: ${freshMarks}</span>` : ""}
         ${freshHomework ? `<span>✦ Новых заданий: ${freshHomework}</span>` : ""}
         ${freshSchedule ? `<span>✦ Расписание изменилось</span>` : ""}
+        <button class="today-read-all" type="button" data-action="mark-read">Отметить всё прочитанным</button>
       </div>`
     : "";
 
@@ -327,6 +395,21 @@ export function renderToday() {
 
   // Делегирование: карточка расписания может обновляться отдельно от экрана.
   content.onclick = (event) => {
+    const readAll = event.target.closest("[data-action='mark-read']");
+    if (readAll && content.contains(readAll)) {
+      markAllRead();
+      renderToday();
+      toast("Отмечено прочитанным");
+      window.dispatchEvent(new CustomEvent("sgo:changes-read"));
+      return;
+    }
+
+    const editNote = event.target.closest("[data-edit-note]");
+    if (editNote && content.contains(editNote)) {
+      if (editScheduleNote(editNote.dataset.editNote)) renderToday();
+      return;
+    }
+
     const button = event.target.closest("[data-go]");
     if (button && content.contains(button)) navigate(button.dataset.go);
   };

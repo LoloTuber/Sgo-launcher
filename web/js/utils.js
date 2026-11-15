@@ -97,6 +97,19 @@ export function markNumber(value, debtAs = 2) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * Средний балл для показа: округляем до двух знаков и разделитель — запятая.
+ * 3.0476190476190474 -> «3,05», 4 -> «4».
+ */
+export function formatAverage(value, digits = 2) {
+  if (value == null || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  const factor = 10 ** digits;
+  const rounded = Math.round(n * factor) / factor;
+  return String(rounded).replace(".", ",");
+}
+
 export function markCls(v) {
   const s = String(v || "").trim().replace(",", ".");
   if (s === "." || s === "-" || s === "0") return "m0";

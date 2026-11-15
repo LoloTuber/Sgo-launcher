@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Точка входа ПК-версии: локальный HTTP-сервер + окно PyWebView."""
+"""Точка входа ПК-версии: локальный HTTP-сервер + окно PyWebView + трей.
+
+Приложение умеет оставаться в фоне:
+  * закрытие окна сворачивает его в системный трей, а не закрывает программу;
+  * фоновый наблюдатель проверяет дневник и присылает уведомления о новых
+    оценках и домашних заданиях;
+  * из трея включается автозапуск вместе с Windows.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -12,13 +18,19 @@ import time
 import traceback
 import urllib.request
 
+import sgo_autostart
 import sgo_homework as core
+import sgo_settings
+import sgo_tray
+import sgo_watcher
 import sgo_web
 
 HOST = "127.0.0.1"
 PORT_CANDIDATES = (8080, 8081, 8082, 8083, 8084, 8085)
 TITLE = "Дневник — Сетевой город"
 DEBUG = os.getenv("SGO_DEBUG", "").strip() not in ("", "0", "false", "False")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 log = logging.getLogger("sgo")
 
@@ -59,35 +71,150 @@ def setup_logging() -> None:
     )
 
 
-# --- Настройки интерфейса (тема, палитра) через отдельный файл ---
-# Хранится отдельно от sgo_config.json, чтобы не стираться при logout.
+# --- Настройки интерфейса (тема, палитра, фоновый режим) ---
+# Хранятся отдельным файлом от sgo_config.json, чтобы не стираться при logout.
 class SettingsApi:
-    """JS-мост для надёжного сохранения настроек интерфейса."""
-
-    def __init__(self) -> None:
-        self._path = core.config_dir() / "sgo_settings.json"
-
-    def _load(self) -> dict:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
-
-    def _save(self, data: dict) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self._path)
+    """JS-мост для надёжного сохранения настроек."""
 
     def get_setting(self, key: str):
-        return self._load().get(str(key))
+        return sgo_settings.load_settings().get(str(key))
 
     def set_setting(self, key: str, value) -> bool:
-        data = self._load()
-        data[str(key)] = value
-        self._save(data)
+        sgo_settings.set_value(key, value)
         return True
+
+    def set_autostart(self, enabled) -> bool:
+        """Включает/выключает автозапуск вместе с Windows."""
+        ok = sgo_autostart.set_enabled(bool(enabled))
+        sgo_settings.set_value(sgo_settings.KEY_AUTOSTART, "1" if ok and enabled else "0")
+        return ok
+
+
+class AppController:
+    """Связывает окно, трей и фонового наблюдателя."""
+
+    def __init__(self, state: "sgo_web.AppState", window) -> None:
+        self.state = state
+        self.window = window
+        self.tray: "sgo_tray.TrayIcon | None" = None
+        self.watcher: "sgo_watcher.Watcher | None" = None
+        self.quitting = False
+
+    # --- Запуск ---
+    def start(self) -> None:
+        self.watcher = sgo_watcher.Watcher(
+            self.state,
+            notifier=self.notify,
+            on_update=self.on_data_updated,
+        )
+        self.watcher.start()
+
+        icon_path = sgo_web.resource_path(os.path.join("web", "icon.ico"))
+        self.tray = sgo_tray.TrayIcon(
+            icon_path,
+            tip="Дневник — Сетевой город",
+            on_open=self.show_window,
+            on_refresh=self.refresh_now,
+            on_quit=self.quit,
+            on_toggle_background=self.toggle_background,
+            on_toggle_notifications=self.toggle_notifications,
+            on_toggle_autostart=self.toggle_autostart,
+        )
+        if self.tray.start():
+            self.tray.background_on = sgo_settings.background_enabled()
+            self.tray.notifications_on = (
+                sgo_settings.notify_marks_enabled() or sgo_settings.notify_homework_enabled()
+            )
+            self.tray.autostart_on = sgo_autostart.is_enabled()
+        else:
+            log.warning("Значок в трее недоступен — фоновая проверка будет без уведомлений")
+            self.tray = None
+
+    def stop(self) -> None:
+        if self.watcher:
+            self.watcher.stop()
+        if self.tray:
+            self.tray.stop()
+
+    # --- Действия трея ---
+    def notify(self, title: str, message: str) -> None:
+        if self.tray:
+            self.tray.notify(title, message)
+        else:
+            log.info("Уведомление: %s — %s", title, message)
+
+    def show_window(self) -> None:
+        try:
+            self.window.show()
+            self.window.restore()
+        except Exception:
+            log.exception("Не удалось показать окно")
+            return
+        self.sync_web_settings()
+        self.refresh_now()
+
+    def refresh_now(self) -> None:
+        if self.watcher:
+            self.watcher.wake()
+        self.run_js("document.querySelector('#refresh')?.click();")
+
+    def toggle_background(self, enabled: bool) -> None:
+        sgo_settings.set_value(sgo_settings.KEY_BACKGROUND, "1" if enabled else "0")
+        log.info("Фоновые обновления: %s", "вкл" if enabled else "выкл")
+        self.sync_web_settings()
+
+    def toggle_notifications(self, enabled: bool) -> None:
+        sgo_settings.set_value(sgo_settings.KEY_NOTIFY_MARKS, "1" if enabled else "0")
+        sgo_settings.set_value(sgo_settings.KEY_NOTIFY_HOMEWORK, "1" if enabled else "0")
+        log.info("Уведомления: %s", "вкл" if enabled else "выкл")
+        self.sync_web_settings()
+
+    def toggle_autostart(self, enabled: bool) -> None:
+        ok = sgo_autostart.set_enabled(enabled)
+        if self.tray:
+            self.tray.autostart_on = ok and enabled
+        sgo_settings.set_value(
+            sgo_settings.KEY_AUTOSTART, "1" if ok and enabled else "0"
+        )
+        log.info("Автозапуск: %s", "вкл" if enabled else "выкл")
+        # Окно должно показать новое состояние чекбокса.
+        self.sync_web_settings()
+
+    def quit(self) -> None:
+        self.quitting = True
+        try:
+            self.window.destroy()
+        except Exception:
+            log.exception("Не удалось закрыть окно")
+
+    # --- Прочее ---
+    def on_data_updated(self) -> None:
+        """Фоновая проверка нашла изменения — обновляем открытое окно."""
+        self.run_js("window.dispatchEvent(new Event('sgo:data-updated'));")
+
+    def sync_web_settings(self) -> None:
+        self.run_js("window.dispatchEvent(new Event('sgo:sync-settings'));")
+
+    def run_js(self, script: str) -> None:
+        try:
+            self.window.evaluate_js(script)
+        except Exception:
+            # Окно ещё не загрузилось или уже закрыто — не критично.
+            pass
+
+    def on_closing(self) -> bool:
+        """Закрытие окна: сворачиваем в трей вместо выхода из программы."""
+        if self.quitting or self.tray is None:
+            return True
+        log.info("Окно скрыто, приложение продолжает работать в фоне")
+        threading.Timer(0.15, self.hide_window).start()
+        return False
+
+    def hide_window(self) -> None:
+        try:
+            self.window.hide()
+        except Exception:
+            log.exception("Не удалось скрыть окно")
 
 
 def start_server(state: "sgo_web.AppState") -> tuple:
@@ -163,7 +290,7 @@ def main() -> int:
         server.shutdown()
         return 1
 
-    webview.create_window(
+    window = webview.create_window(
         title=TITLE,
         url=f"http://{HOST}:{port}/",
         width=1100,
@@ -171,6 +298,10 @@ def main() -> int:
         min_size=(900, 600),
         js_api=SettingsApi(),
     )
+
+    controller = AppController(state, window)
+    controller.start()
+    window.events.closing += controller.on_closing
 
     try:
         # КЛЮЧЕВОЙ ФИКС: private_mode=False, иначе localStorage стирается при закрытии.
@@ -182,6 +313,7 @@ def main() -> int:
         return 1
     finally:
         log.info("Завершение работы")
+        controller.stop()
         server.shutdown()
         server.server_close()
 

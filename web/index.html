@@ -26,6 +26,7 @@
       <span id="avg">—</span>
       <small>средний балл</small>
     </div>
+    <button id="mark-read" class="icon-btn" type="button" title="Отметить всё прочитанным" aria-label="Отметить всё прочитанным" hidden>✓</button>
     <button id="theme-toggle" class="icon-btn" type="button" title="Сменить тему">
       <span id="theme-icon">🌙</span>
     </button>
@@ -74,8 +75,17 @@
   </section>
 
   <section class="panel" data-panel="diary">
-    <div class="panel-head">
-      <div><h2>Дневник</h2><p class="subtle" id="diary-label">Текущая неделя</p></div>
+    <div class="panel-head diary-head">
+      <div class="diary-title">
+        <div class="diary-title-row">
+          <h2>Дневник</h2>
+          <label class="diary-date" for="diary-date" title="Перейти к произвольной дате">
+            <span class="diary-date-label">К дате</span>
+            <input type="date" id="diary-date" class="diary-date-input" />
+          </label>
+        </div>
+        <p class="subtle" id="diary-label">Текущая неделя</p>
+      </div>
       <div class="diary-nav">
         <button id="diary-prev" class="btn btn-outline" type="button">← Пред. неделя</button>
         <button id="diary-next" class="btn btn-outline" type="button">След. неделя →</button>
@@ -161,23 +171,27 @@
 
 <!-- Модальное окно настроек -->
 <div id="settings-modal" class="modal" hidden>
-  <div class="modal-content">
+  <div class="modal-content settings-content">
     <h3>Настройки</h3>
-    <p class="subtle" style="margin-bottom: 16px;">Снимите галочки, чтобы скрыть ненужные разделы.</p>
-    <div class="settings-list">
-      <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
-      <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
-      <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
-      <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
-      <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
-      <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
-      <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
-      <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
-      <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
+
+    <div class="settings-block">
+      <div class="settings-block-title">📌 Верхняя панель</div>
+      <p class="subtle">Какие разделы показывать в верхней панели.</p>
+      <div class="settings-list">
+        <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
+        <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
+        <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
+        <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
+        <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
+        <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
+        <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
+        <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
+        <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
+      </div>
     </div>
 
     <div class="settings-block">
-      <div class="settings-block-title">👁 Вид</div>
+      <div class="settings-block-title">🎨 Интерфейс и тема</div>
       <label class="settings-check"><input type="checkbox" id="setting-compact"> Компактные карточки</label>
       <label class="settings-check"><input type="checkbox" id="setting-hide-empty"> Скрывать пустые уроки</label>
       <label class="settings-check"><input type="checkbox" id="setting-today-only"> В расписании только сегодня</label>
@@ -189,24 +203,53 @@
           <option value="xlarge">Очень крупный</option>
         </select>
       </div>
+      <div class="settings-row">
+        <label for="color-theme-select">Цветовая тема</label>
+        <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;">
+          <option value="green">🌿 Зелёная (по умолчанию)</option>
+          <option value="blue">🔵 Синяя</option>
+          <option value="pink">🌸 Розовая</option>
+          <option value="purple">🟣 Фиолетовая</option>
+          <option value="orange">🟠 Оранжевая</option>
+          <option value="red">🔴 Красная</option>
+          <option value="teal">🌊 Бирюзовая</option>
+          <option value="cyan">💧 Голубая</option>
+          <option value="slate">⚫ Графитовая</option>
+        </select>
+      </div>
     </div>
 
     <div class="settings-block">
-      <label for="color-theme-select" class="settings-block-title">🎨 Цветовая тема</label>
-      <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;">
-        <option value="green">🌿 Зелёная (по умолчанию)</option>
-        <option value="blue">🔵 Синяя</option>
-        <option value="pink">🌸 Розовая</option>
-        <option value="purple">🟣 Фиолетовая</option>
-        <option value="orange">🟠 Оранжевая</option>
-        <option value="red">🔴 Красная</option>
-        <option value="teal">🌊 Бирюзовая</option>
-        <option value="cyan">💧 Голубая</option>
-        <option value="slate">⚫ Графитовая</option>
-      </select>
+      <div class="settings-block-title">🔔 Фоновый режим</div>
+      <p class="subtle">Приложение проверяет дневник в фоне и присылает уведомления о новых оценках и заданиях.</p>
+      <label class="settings-check"><input type="checkbox" id="setting-background"> Проверять дневник в фоне</label>
+      <label class="settings-check"><input type="checkbox" id="setting-notify-marks"> Уведомлять о новых оценках</label>
+      <label class="settings-check"><input type="checkbox" id="setting-notify-homework"> Уведомлять о новом домашнем задании</label>
+      <div class="settings-row">
+        <label for="setting-interval">Интервал проверки</label>
+        <select id="setting-interval" class="term-select">
+          <option value="5">Каждые 5 минут</option>
+          <option value="10">Каждые 10 минут</option>
+          <option value="15">Каждые 15 минут</option>
+          <option value="30">Каждые 30 минут</option>
+          <option value="60">Каждый час</option>
+        </select>
+      </div>
+      <label class="settings-check" id="setting-autostart-row"><input type="checkbox" id="setting-autostart"> Запускать вместе с Windows</label>
+      <p class="subtle" id="setting-autostart-hint" hidden>Автозапуск доступен только в версии для компьютера.</p>
     </div>
 
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+    <div class="settings-block">
+      <div class="settings-block-title">💾 Сохранение данных</div>
+      <label class="settings-check"><input type="checkbox" id="setting-cache"> Хранить данные для офлайна</label>
+      <p class="subtle">Нужно, чтобы дневник, расписание и калькулятор открывались без интернета.</p>
+      <div class="settings-actions">
+        <button id="clear-cache-btn" class="btn-outline" type="button">Очистить сохранённые данные</button>
+        <button id="clear-changes-btn" class="btn-outline" type="button">Сбросить отметки «новое»</button>
+      </div>
+    </div>
+
+    <div class="settings-footer">
       <button id="logout-btn" class="btn" style="background: var(--red); border-color: var(--red);">Выйти</button>
       <button id="close-settings" class="btn">Готово</button>
     </div>

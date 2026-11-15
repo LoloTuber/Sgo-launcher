@@ -4,6 +4,12 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 // ---------- Константы ----------
+/** Сколько живёт кэш дневника по неделям (мс). */
+internal const val DIARY_CACHE_TTL = 10 * 60 * 1000L
+
+/** Сколько живёт кэш тяжёлых ответов — успеваемость, периоды (мс). */
+internal const val DATA_CACHE_TTL = 10 * 60 * 1000L
+
 internal val WEEKDAYS = arrayOf(
     "воскресенье", "понедельник", "вторник", "среда",
     "четверг", "пятница", "суббота"
@@ -31,9 +37,11 @@ internal val ATTENDANCE_CODES = mapOf(
 
 internal val NOT_ABSENCE_CODES = setOf("ОСВ", "ОП")
 
-// «Точка» (долг/невыставленная оценка) — показываем, но в среднее не включаем.
+// «Точка»/прочерк — долг (невыставленная оценка). В расчётах среднего
+// учитывается как «2» с весом задания — так же, как в веб-интерфейсе.
 internal const val DOT_MARK = "."
 internal const val DASH_MARK = "-"
+internal const val DEBT_MARK_VALUE = 2.0
 
 // ---------- Data-классы весов ----------
 internal data class MarkWeight(val weight: Int, val id: Int, val type: String)
@@ -58,6 +66,18 @@ internal fun normalizeMarkValue(value: String): String {
     val normalized = value.trim().replace(',', '.')
     val number = normalized.toDoubleOrNull() ?: return normalized
     return if (number % 1.0 == 0.0) number.toInt().toString() else normalized
+}
+
+/**
+ * Числовое значение отметки для расчётов.
+ * Долг («.»/«-») считается как «2», пустое или нечисловое — null.
+ */
+internal fun markNumber(value: String?): Double? {
+    val text = (value ?: "").trim()
+    if (text.isEmpty()) return null
+    if (text == DOT_MARK || text == DASH_MARK) return DEBT_MARK_VALUE
+    val number = text.replace(',', '.').toDoubleOrNull() ?: return null
+    return if (number > 0) number else null
 }
 
 internal fun weightKey(subject: String, date: String, value: String) = "$subject|$date|$value"

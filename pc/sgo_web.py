@@ -40,6 +40,15 @@ WEB_ROOT = Path(resource_path("web"))
 _WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 _MONTHS_GENITIVE = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
 
+# Кэш дневника по неделям: нужен, чтобы предзагруженные недели
+# открывались мгновенно и не дёргали сервер СГО заново.
+DIARY_CACHE_TTL = 600  # 10 минут
+_diary_cache: Dict[str, Dict[str, Any]] = {}
+_diary_cache_time: Dict[str, float] = {}
+_diary_cache_lock = threading.Lock()
+_preload_lock = threading.Lock()
+_preload_running = False
+
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -148,11 +157,41 @@ def _parse_average(value: Any) -> Optional[float]:
     return round(number, 2)
 
 
-def _results_from_parsed(parsed: Dict[str, Any], term_label: str, mode: str) -> Dict[str, Any]:
+def _marks_weighted_average(item: Dict[str, Any],
+                            weights_index: Optional[Dict[tuple, List[Dict[str, Any]]]]) -> tuple:
+    """Собственное взвешенное среднее предмета: (среднее, сумма весов).
+
+    Долг («.»/«-») считается как «2», вес оценки берётся из дневника.
+    """
+    name = (item.get("name") or "").strip()
+    total = 0.0
+    weights = 0.0
+    for m in item.get("marks") or []:
+        value = m.get("value")
+        number = _mark_number(value)
+        if number is None:
+            continue
+        weight = 1
+        if weights_index:
+            info = _take_mark_info(
+                weights_index, name, str(m.get("date") or "")[:10], _mark_value(value)
+            ) or {}
+            weight = info.get("weight") or 1
+        total += number * weight
+        weights += weight
+    return (round(total / weights, 2) if weights else None, weights)
+
+
+def _results_from_parsed(parsed: Dict[str, Any], term_label: str, mode: str,
+                         weights_index: Optional[Dict[tuple, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
     """Собирает список «Итогов» из распарсенного отчёта StudentTotal.
 
     mode="year" — годовые отметки (последняя колонка таблицы);
     mode="current" — средние баллы за выбранный триместр/период.
+
+    Средние из отчёта СГО (average / termAverage / final) не перезаписываются.
+    Общий балл в режиме «current» считаем сами — взвешенно, с учётом весов
+    оценок (10/15/20/30) и долга как «2».
     """
     subjects = []
     weighted_sum = 0.0
@@ -165,6 +204,7 @@ def _results_from_parsed(parsed: Dict[str, Any], term_label: str, mode: str) -> 
         final_value = _parse_average(item.get("final"))
         average_value = _parse_average(item.get("average"))
         marks_count = len([m for m in item.get("marks") or [] if _parse_average(m.get("value")) is not None])
+        own_average, own_weight = _marks_weighted_average(item, weights_index)
         if final_value is not None:
             finals_present += 1
         value = final_value if mode == "year" else average_value
@@ -174,9 +214,20 @@ def _results_from_parsed(parsed: Dict[str, Any], term_label: str, mode: str) -> 
             "final": final_value,
             "termAverage": average_value,
             "marksCount": marks_count,
+            # Собственное взвешенное среднее и «вес» предмета (сумма весов оценок).
+            "weightedAverage": own_average,
+            "weight": own_weight,
         })
-        if value is not None:
-            weight = marks_count if mode == "current" else 1
+        if mode == "year":
+            # Годовая отметка — одна оценка на предмет, вес не применим.
+            if value is not None:
+                weighted_sum += value
+                weight_total += 1
+        elif own_average is not None:
+            weighted_sum += own_average * own_weight
+            weight_total += own_weight
+        elif value is not None:
+            weight = marks_count or 1
             weighted_sum += value * weight
             weight_total += weight
     subjects.sort(key=lambda item: item["name"])
@@ -246,7 +297,18 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
             except Exception:
                 pass
 
-        result = _results_from_parsed(parsed, label, "year" if mode == "year" else "current")
+        # Веса оценок для взвешенного общего балла: берём их из дневника,
+        # в отчёте StudentTotal весов нет.
+        weights = {}
+        try:
+            start, end = _term_range(parsed, dash)
+            weights = _weights_index(state, start, end)
+        except Exception as exc:
+            traceback.print_exc()
+            print(f"! Не удалось получить веса оценок для итогов: {exc}", file=sys.stderr)
+            weights = {}
+
+        result = _results_from_parsed(parsed, label, "year" if mode == "year" else "current", weights)
 
         # Проверяем, что сервер действительно вернул запрошенный период.
         if term_id and result.get("term") and str(result["term"]).strip() != str(label).strip():
@@ -302,6 +364,15 @@ def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, A
         except ValueError: d = date.today()
     else: d = date.today()
     monday = d - timedelta(days=d.weekday())
+    key = monday.isoformat()
+
+    # Свежая копия из кэша — мгновенный ответ без запроса в СГО.
+    with _diary_cache_lock:
+        stamp = _diary_cache_time.get(key, 0)
+        cached = _diary_cache.get(key)
+        if cached is not None and (time.time() - stamp) < DIARY_CACHE_TTL:
+            return cached
+
     with state.lock:
         state.connect()
         diary = state.client.diary(monday)
@@ -332,7 +403,62 @@ def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, A
             })
         days.append({"date": day_date.isoformat(), "weekday": _WEEKDAYS[day_date.weekday()], "lessons": lessons_out})
     days.sort(key=lambda x: x["date"])
-    return {"weekStart": monday.isoformat(), "weekEnd": (monday + timedelta(days=6)).isoformat(), "days": days}
+    result = {"weekStart": monday.isoformat(), "weekEnd": (monday + timedelta(days=6)).isoformat(), "days": days}
+
+    with _diary_cache_lock:
+        _diary_cache[key] = result
+        _diary_cache_time[key] = time.time()
+    return result
+
+
+def clear_diary_cache() -> None:
+    """Сбрасывает кэш дневника — например, после ручного обновления."""
+    with _diary_cache_lock:
+        _diary_cache.clear()
+        _diary_cache_time.clear()
+
+
+def preload_diary(state: AppState, weeks: int = 2) -> int:
+    """Заранее загружает дневник на weeks недель назад и вперёд.
+
+    Делается в фоне и последним: основные экраны должны загрузиться раньше.
+    """
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    loaded = 0
+    for offset in range(-weeks, weeks + 1):
+        if offset == 0:
+            continue
+        target = monday + timedelta(days=7 * offset)
+        try:
+            diary_data(state, target.isoformat())
+            loaded += 1
+        except Exception as exc:
+            print(f"! предзагрузка дневника ({target.isoformat()}) не удалась: {exc}", file=sys.stderr)
+    return loaded
+
+
+def start_diary_preload(state: AppState, weeks: int = 2) -> bool:
+    """Запускает предзагрузку в отдельном потоке. True — если уже шла."""
+    global _preload_running
+    with _preload_lock:
+        if _preload_running:
+            return False
+        _preload_running = True
+
+    def worker() -> None:
+        global _preload_running
+        try:
+            preload_diary(state, weeks)
+        except Exception as exc:
+            print(f"! предзагрузка дневника не удалась: {exc}", file=sys.stderr)
+        finally:
+            with _preload_lock:
+                _preload_running = False
+
+    threading.Thread(target=worker, name="sgo-preload", daemon=True).start()
+    return True
+
 
 def schedule_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, Any]:
     if week_start:
@@ -435,6 +561,41 @@ def _mark_value(value: Any) -> str:
     return str(int(number)) if number == int(number) else f"{number:g}"
 
 
+def _is_debt(value: Any) -> bool:
+    """Долг — это точка или прочерк в журнале."""
+    return str("" if value is None else value).strip() in (".", "-")
+
+
+def _mark_number(value: Any) -> Optional[float]:
+    """Числовое значение отметки для расчётов.
+
+    Долг («.»/«-») по просьбе пользователя считается как «2» — так же,
+    как в веб-интерфейсе (js/weights.js). Вес при этом учитывается.
+    """
+    text = str("" if value is None else value).strip()
+    if text in (".", "-"):
+        return 2.0
+    try:
+        number = float(text.replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _weighted_average(marks: List[Dict[str, Any]]) -> Optional[float]:
+    """Взвешенное среднее по отметкам: Σ(значение × вес) / Σ(вес)."""
+    total = 0.0
+    weights = 0.0
+    for mark in marks or []:
+        value = _mark_number(mark.get("value"))
+        if value is None:
+            continue
+        weight = mark.get("weight") or 1
+        total += value * weight
+        weights += weight
+    return round(total / weights, 2) if weights else None
+
+
 def _term_range(parsed: Dict[str, Any], dashboard: Dict[str, Any]) -> tuple:
     days = [_as_date(day) for day in parsed.get("days") or []]
     days = [day for day in days if day]
@@ -534,12 +695,15 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
             weighted_sum = 0.0
             weight_total = 0.0
             counts = {str(i): 0 for i in range(1, 6)}
+            debts_count = 0
             absences = []
             absent_counts = {}
             for item in parsed.get("subjects") or []:
                 subject_name = item.get("name") or ""
                 raw_marks = sorted(item.get("marks") or [], key=lambda m: m["date"], reverse=True)
                 marks = []
+                subject_sum = 0.0
+                subject_weight = 0.0
                 for m in raw_marks:
                     value = m.get("value")
                     mark_date = str(m.get("date") or "")[:10]
@@ -560,19 +724,28 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
                         "type": type_name,
                         "topic": "",
                     })
-                    try:
-                        v = float(str(value).replace(",", "."))
-                    except (TypeError, ValueError):
+                    # Долг («.»/«-») считаем как «2» — так же, как в интерфейсе.
+                    v = _mark_number(value)
+                    if v is None:
                         continue
+                    if _is_debt(value):
+                        debts_count += 1
+                    else:
+                        key = str(int(v)) if v == int(v) else str(v)
+                        counts[key] = counts.get(key, 0) + 1
                     all_values.append(v)
                     weighted_sum += v * weight
                     weight_total += weight
-                    key = str(int(v)) if v == int(v) else str(v)
-                    counts[key] = counts.get(key, 0) + 1
+                    subject_sum += v * weight
+                    subject_weight += weight
                 subjects.append({
                     "name": subject_name,
                     "marks": marks,
+                    # «average» — среднее из отчёта СГО, его не трогаем.
                     "average": float(item.get("average")) if item.get("average") else None,
+                    # Собственное взвешенное среднее (долг = 2, вес задания учитывается).
+                    "weightedAverage": round(subject_sum / subject_weight, 2) if subject_weight else None,
+                    "weight": subject_weight,
                 })
                 for absence in item.get("absences") or []:
                     code = (absence.get("code") or "").upper()
@@ -581,7 +754,10 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
             return {
                 "subjects": subjects,
                 "average": round(weighted_sum / weight_total, 2) if weight_total else None,
-                "marksCount": len(all_values), "counts": counts, "attendance": {"items": absences, "counts": absent_counts, "total": sum(absent_counts.values())},
+                "marksCount": len(all_values), "counts": counts, "debtsCount": debts_count,
+                "attendance": {"items": absences, "counts": absent_counts, "total": sum(absent_counts.values()),
+                               # Пустой список = «пропусков нет» только если отчёт реально разобран.
+                               "available": bool(parsed.get("subjects"))},
                 "asOf": parsed.get("as_of") or "", "term": parsed.get("term") or dash.get("termName") or "",
             }
         except Exception as e:
@@ -592,7 +768,7 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
             is_future = bool(term_id and current_term_id and term_id != current_term_id)
             return {
                 "subjects": [], "average": None, "marksCount": 0, "counts": {},
-                "attendance": {"items": [], "counts": {}, "total": 0},
+                "attendance": {"items": [], "counts": {}, "total": 0, "available": False},
                 "asOf": "", "term": "" if is_future else (dash.get("termName") or ""),
                 "error": (
                     f"Оценки за выбранный период недоступны. "
@@ -605,15 +781,85 @@ def assignment_details(state: AppState, assignment_id: int) -> Dict[str, Any]:
     with state.lock:
         state.connect()
         info = state.client.assignment_info(assignment_id)
+
+    def _clean(value: Any) -> str:
+        """Убирает пустые значения и строку «null» — иначе в UI висит «null»."""
+        if not isinstance(value, str):
+            return ""
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+        if not text or text.lower() in ("null", "none"):
+            return ""
+        return text
+
     details = []
     for key in ("description", "problemName", "activityName", "comment"):
-        val = info.get(key)
-        if isinstance(val, str) and val.strip():
-            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", val)).strip()
-            if text and text not in details: details.append(text)
-    teachers = [t.get("name").strip() for t in (info.get("teachers") or []) if isinstance(t, dict) and t.get("name")]
-    files = [str(f.get("name") or f.get("originalFileName") or "").strip() for f in (info.get("attachments") or []) if isinstance(f, dict)]
-    return {"id": assignment_id, "details": details, "teachers": teachers, "files": [f for f in files if f]}
+        text = _clean(info.get(key))
+        if text and text not in details:
+            details.append(text)
+    teachers = [_clean(t.get("name")) for t in (info.get("teachers") or []) if isinstance(t, dict)]
+    teachers = [t for t in teachers if t]
+    files = []
+    for f in (info.get("attachments") or []):
+        if not isinstance(f, dict):
+            continue
+        name = _clean(f.get("name") or f.get("originalFileName"))
+        if name:
+            files.append(name)
+
+    # Предмет из группы («9г/Алгебра»).
+    subject = ""
+    group = info.get("subjectGroup")
+    if isinstance(group, dict):
+        subject = _clean(group.get("name"))
+
+    # Дата урока: СГО отдаёт «2026-11-12T00:00:00».
+    date_text = ""
+    raw_date = info.get("date")
+    if isinstance(raw_date, str) and len(raw_date) >= 10:
+        date_text = raw_date[:10]
+
+    weight = info.get("weight")
+    try:
+        weight = int(weight) if weight is not None else 0
+    except (TypeError, ValueError):
+        weight = 0
+
+    average = info.get("averageMark")
+    try:
+        average = float(average) if average is not None else None
+    except (TypeError, ValueError):
+        average = None
+
+    # Оценки класса по этому заданию: сколько людей получило каждую отметку.
+    class_marks = []
+    for stat in info.get("markStats") or []:
+        if not isinstance(stat, dict):
+            continue
+        value = stat.get("mark")
+        count = stat.get("count")
+        if value is None or count is None:
+            continue
+        try:
+            class_marks.append({
+                "mark": str(value),
+                "count": int(count),
+                "percentage": int(stat.get("percentage") or 0),
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "id": assignment_id,
+        "subject": subject,
+        "topic": _clean(info.get("assignmentName")),
+        "date": date_text,
+        "weight": weight,
+        "averageMark": average,
+        "markStats": class_marks,
+        "details": details,
+        "teachers": teachers,
+        "files": files,
+    }
 
 class SgoHttpServer(ThreadingHTTPServer):
     """HTTP-сервер с защитой от «двойного» захвата порта в Windows.
@@ -682,6 +928,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif path == "/api/diary":
                 week = (query.get("week") or [None])[0]
                 self._send_json({"ok": True, **diary_data(self.state, week)})
+            elif path == "/api/diary/preload":
+                # Фоновая предзагрузка соседних недель — отдаём сразу.
+                raw = (query.get("weeks") or ["2"])[0]
+                try:
+                    weeks = max(1, min(4, int(raw)))
+                except (TypeError, ValueError):
+                    weeks = 2
+                self._send_json({"ok": True, "started": start_diary_preload(self.state, weeks)})
             elif path == "/api/schedule":
                 week = (query.get("week") or [None])[0]
                 self._send_json({"ok": True, **schedule_data(self.state, week)})
@@ -696,7 +950,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 try: self._send_json({"ok": True, **assignment_details(self.state, aid)})
                 except Exception as exc: self._send_json({"ok": False, "error": str(exc)}, 502)
             elif path == "/api/refresh":
-                self.state.reset(); self._send_json({"ok": True})
+                self.state.reset()
+                clear_diary_cache()
+                self._send_json({"ok": True})
             else: self._serve_static(path)
         except Exception as exc:
             if "Не авторизован" in str(exc):

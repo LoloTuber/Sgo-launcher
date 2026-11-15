@@ -12,6 +12,8 @@ env/
 build/
 dist/
 *.spec
+# ...но spec-файл сборки ПК-версии нужен в репозитории:
+!pc/Дневник.spec
 
 # --- Android / Kotlin ---
 *.iml

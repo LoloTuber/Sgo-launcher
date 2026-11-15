@@ -1,94 +1,157 @@
 package com.example.sgodiary
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Домашнее задание к ближайшему учебному дню.
+ *
+ * Начинаем с завтрашнего дня. Если в этот день уроков нет (выходной, праздник,
+ * карантин), ищем ближайший учебный день в пределах 8 дней вперёд — так же,
+ * как в ПК-версии. В этом случае подпись сообщает, что показан ближайший
+ * учебный день.
+ */
 internal fun SgoClient.getHomeworkForTomorrow(): JSONObject {
     val hwJson = JSONObject()
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     try {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val tomorrow = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, 1) }
+        val base = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val tomorrow = (base.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
         val tomorrowStr = sdf.format(tomorrow.time)
 
-        val monday = Calendar.getInstance().apply {
-            time = tomorrow.time
-            set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-        }
-        val weekStart = sdf.format(monday.time)
-        val calEnd = Calendar.getInstance().apply {
-            time = monday.time
-            add(Calendar.DAY_OF_YEAR, 6)
-        }
-        val weekEnd = sdf.format(calEnd.time)
+        var foundDate: Calendar? = null
+        var foundLessons: JSONArray? = null
 
-        val diary = get(
-            "student/diary",
-            mapOf(
-                "studentId" to studentId!!,
-                "weekStart" to weekStart,
-                "weekEnd" to weekEnd,
-                "yearId" to yearId!!
-            )
-        )
-        val days = diary.optJSONArray("weekDays") ?: JSONArray()
-
-        var targetDay: JSONObject? = null
-        for (i in 0 until days.length()) {
-            val d = days.getJSONObject(i)
-            if (d.optString("date").startsWith(tomorrowStr)) { targetDay = d; break }
+        for (offset in 0..7) {
+            val day = (tomorrow.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, offset) }
+            val lessons = diaryLessonsFor(day, sdf)
+            if (lessons != null && lessons.length() > 0) {
+                foundDate = day
+                foundLessons = lessons
+                break
+            }
         }
 
-        if (targetDay != null) {
-            val lessonsArr = JSONArray()
-            val lessons = targetDay.optJSONArray("lessons") ?: JSONArray()
+        val lessonsOut = JSONArray()
+        var tasksCount = 0
+        val lessons = foundLessons
+        if (lessons != null) {
             for (i in 0 until lessons.length()) {
-                val l = lessons.getJSONObject(i)
+                val lesson = lessons.getJSONObject(i)
                 val tasks = JSONArray()
-                val assigns = l.optJSONArray("assignments") ?: JSONArray()
-                for (j in 0 until assigns.length()) {
-                    val a = assigns.getJSONObject(j)
-                    val text = a.optString("assignmentName")
+                val rawTasks = lesson.optJSONArray("tasks") ?: JSONArray()
+                for (j in 0 until rawTasks.length()) {
+                    val task = rawTasks.getJSONObject(j)
+                    val text = task.optString("text")
                     if (text.isNotEmpty()) {
                         tasks.put(JSONObject().apply {
-                            put("id", a.optInt("id"))
+                            put("id", task.optInt("id"))
                             put("text", text)
-                            put("type", a.optString("typeName"))
+                            put("type", task.optString("type"))
                         })
                     }
                 }
-                if (tasks.length() > 0) {
-                    lessonsArr.put(JSONObject().apply {
-                        put("number", l.optInt("number"))
-                        put("subject", l.optString("subjectName"))
-                        put("start", l.optString("startTime").take(5))
-                        put("end", l.optString("endTime").take(5))
-                        put("tasks", tasks)
-                    })
-                }
+                tasksCount += tasks.length()
+                lessonsOut.put(JSONObject().apply {
+                    put("number", lesson.optInt("number"))
+                    put("subject", lesson.optString("subject"))
+                    put("room", lesson.optString("room"))
+                    put("start", lesson.optString("start"))
+                    put("end", lesson.optString("end"))
+                    put("tasks", tasks)
+                })
             }
-            hwJson.put("lessons", lessonsArr)
-            hwJson.put("isTomorrow", true)
-        } else {
-            hwJson.put("lessons", JSONArray())
-            hwJson.put("note", "Завтра уроков нет (или это выходной).")
         }
-        hwJson.put("label", "${tomorrow.get(Calendar.DAY_OF_MONTH)} ${MONTHS[tomorrow.get(Calendar.MONTH)]}")
+
+        val date = foundDate
+        if (date == null) {
+            hwJson.put("lessons", JSONArray())
+            hwJson.put("date", tomorrowStr)
+            hwJson.put("label", ruDayLabel(tomorrow))
+            hwJson.put("isTomorrow", true)
+            hwJson.put("tasksCount", 0)
+            hwJson.put("note", "Ближайших учебных дней не найдено.")
+        } else {
+            val dateStr = sdf.format(date.time)
+            val isTomorrow = dateStr == tomorrowStr
+            hwJson.put("lessons", lessonsOut)
+            hwJson.put("date", dateStr)
+            hwJson.put("label", ruDayLabel(date))
+            hwJson.put("isTomorrow", isTomorrow)
+            hwJson.put("tasksCount", tasksCount)
+            if (!isTomorrow) {
+                hwJson.put("note", "Завтра уроков нет — показываю ближайший учебный день.")
+            }
+        }
+    } catch (e: AuthExpiredException) {
+        throw e
     } catch (e: Exception) {
+        Log.w("SGO_QUICK", "Не удалось собрать домашнее задание: ${e.message}")
         hwJson.put("lessons", JSONArray())
         hwJson.put("label", "Завтра")
+        hwJson.put("isTomorrow", true)
+        hwJson.put("tasksCount", 0)
     }
     return hwJson
 }
 
+/** Понедельник недели, к которой относится указанный день. */
+private fun mondayOfWeek(day: Calendar): Calendar {
+    val cal = Calendar.getInstance().apply { time = day.time }
+    // Calendar.DAY_OF_WEEK: пн=2 … вс=7. Считаем смещение явно — set(DAY_OF_WEEK)
+    // в разных версиях Calendar ведёт себя по-разному.
+    cal.add(Calendar.DAY_OF_YEAR, -((cal.get(Calendar.DAY_OF_WEEK) + 5) % 7))
+    return cal
+}
+
+/**
+ * Уроки указанного дня из дневника. null — такого дня в дневнике нет
+ * (выходной или каникулы). Неделя берётся из кэша дневника, поэтому
+ * дополнительных запросов обычно не делается.
+ */
+private fun SgoClient.diaryLessonsFor(day: Calendar, sdf: SimpleDateFormat): JSONArray? {
+    val weekStart = sdf.format(mondayOfWeek(day).time)
+    val week = JSONObject(getDiaryJson(weekStart))
+    val days = week.optJSONArray("days") ?: JSONArray()
+    val dateStr = sdf.format(day.time)
+    for (i in 0 until days.length()) {
+        val d = days.getJSONObject(i)
+        if (d.optString("date").take(10) == dateStr) {
+            return d.optJSONArray("lessons") ?: JSONArray()
+        }
+    }
+    return null
+}
+
+/** «16 ноября, понедельник» */
+private fun ruDayLabel(day: Calendar): String {
+    val month = MONTHS[day.get(Calendar.MONTH)]
+    val weekday = WEEKDAYS[day.get(Calendar.DAY_OF_WEEK) - 1]
+    return "${day.get(Calendar.DAY_OF_MONTH)} $month, $weekday"
+}
+
 internal fun SgoClient.getQuickJson(): String {
-    val dash = get(
-        "student-diary/dashboard",
-        mapOf("studentId" to studentId!!, "version" to "2")
-    )
     val response = JSONObject()
     response.put("ok", true)
+
+    // Дашборд нужен для шапки и среднего балла, но его недоступность не должна
+    // ломать домашнее задание — отдаём то, что есть.
+    val dash = try {
+        get("student-diary/dashboard", mapOf("studentId" to studentId!!, "version" to "2"))
+    } catch (e: AuthExpiredException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("SGO_QUICK", "Дашборд СГО недоступен: ${e.message}")
+        JSONObject()
+    }
 
     val studentJson = JSONObject()
     studentJson.put("name", studentName)
@@ -121,15 +184,30 @@ internal fun SgoClient.getQuickJson(): String {
 }
 
 internal fun SgoClient.getDiaryJson(weekStr: String?): String {
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     val monday = if (weekStr != null)
-        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(weekStr)!!
+        sdf.parse(weekStr)!!
     else {
+        // Понедельник текущей недели. Считаем явно: set(DAY_OF_WEEK) в разных
+        // версиях Calendar ведёт себя по-разному, а от этого зависит и ключ кэша.
         val cal = Calendar.getInstance()
-        cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        cal.add(Calendar.DAY_OF_YEAR, -((cal.get(Calendar.DAY_OF_WEEK) + 5) % 7))
         cal.time
     }
-    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     val weekStart = sdf.format(monday)
+
+    // Свежая копия из кэша — отвечаем сразу, не дёргая СГО.
+    synchronized(diaryCache) {
+        val cached = diaryCache[weekStart]
+        if (cached != null && System.currentTimeMillis() - cached.first < DIARY_CACHE_TTL) {
+            return cached.second
+        }
+    }
+
     val calEnd = Calendar.getInstance().apply { time = monday; add(Calendar.DAY_OF_YEAR, 6) }
     val weekEnd = sdf.format(calEnd.time)
 
@@ -168,6 +246,7 @@ internal fun SgoClient.getDiaryJson(weekStr: String?): String {
             val lJson = JSONObject()
             lJson.put("number", l.optInt("number"))
             lJson.put("subject", l.optString("subjectName"))
+            lJson.put("room", l.optString("room"))
             lJson.put("start", l.optString("startTime").take(5))
             lJson.put("end", l.optString("endTime").take(5))
 
@@ -217,7 +296,40 @@ internal fun SgoClient.getDiaryJson(weekStr: String?): String {
     val daysArr = JSONArray()
     for ((_, dayJson) in dayObjects) daysArr.put(dayJson)
     response.put("days", daysArr)
-    return response.toString()
+
+    val json = response.toString()
+    synchronized(diaryCache) { diaryCache[weekStart] = Pair(System.currentTimeMillis(), json) }
+    return json
+}
+
+/**
+ * Предзагрузка дневника на weeks недель назад и вперёд.
+ * Делается в отдельном потоке: основные экраны не должны ждать.
+ */
+internal fun SgoClient.preloadDiary(weeks: Int) {
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val cal = Calendar.getInstance()
+    cal.set(Calendar.HOUR_OF_DAY, 0)
+    cal.set(Calendar.MINUTE, 0)
+    cal.set(Calendar.SECOND, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    val offset = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 // пн=1 -> 0, вс=7 -> 6
+    cal.add(Calendar.DAY_OF_YEAR, -offset)
+
+    Thread({
+        for (i in -weeks..weeks) {
+            if (i == 0) continue
+            val target = Calendar.getInstance().apply {
+                time = cal.time
+                add(Calendar.DAY_OF_YEAR, 7 * i)
+            }
+            try {
+                getDiaryJson(sdf.format(target.time))
+            } catch (e: Exception) {
+                Log.w("SGO_PRELOAD", "Не удалось загрузить неделю: ${e.message}")
+            }
+        }
+    }, "sgo-preload").start()
 }
 
 internal fun SgoClient.getScheduleJson(weekStr: String?): String {

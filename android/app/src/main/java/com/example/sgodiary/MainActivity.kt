@@ -23,12 +23,12 @@ class ClipboardBridge(private val context: Context) {
 }
 
 /**
- * Настройки интерфейса (тёмная тема, цветовая палитра).
+ * Настройки интерфейса (тёмная тема, цветовая палитра, фоновый режим).
  * Хранится в SharedPreferences — переживает перезапуск процесса,
  * переустановку WebView и смену порта. Отдельный файл prefs,
  * чтобы не пересекаться с логином/паролем (SgoDiaryPrefs).
  */
-class SettingsBridge(context: Context) {
+class SettingsBridge(private val context: Context) {
     private val prefs = context.getSharedPreferences("SgoSettingsPrefs", Context.MODE_PRIVATE)
 
     @JavascriptInterface
@@ -38,6 +38,11 @@ class SettingsBridge(context: Context) {
     fun set(key: String, value: String) {
         // commit() — синхронно, чтобы значение точно записалось до закрытия приложения.
         prefs.edit().putString(key, value).commit()
+        // Фоновый режим: сервис запускаем/останавливаем сразу,
+        // чтобы переключение в настройках работало без перезапуска.
+        if (key == SgoWatchService.KEY_ENABLED) {
+            if (value == "1") SgoWatchService.start(context) else SgoWatchService.stop(context)
+        }
     }
 
     @JavascriptInterface
@@ -80,7 +85,30 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
 
+        // Фоновый режим: сервис следит за дневником, пока приложение закрыто.
+        if (SgoWatchService.isEnabled(this)) {
+            SgoWatchService.start(this)
+        }
+        requestNotificationPermission()
+
         webView.loadUrl("http://127.0.0.1:8080/")
+    }
+
+    /**
+     * Android 13+ требует отдельного разрешения на уведомления.
+     * Без него фоновая проверка всё равно работает, но сообщения не покажутся.
+     */
+    private fun requestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        try {
+            val granted = checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

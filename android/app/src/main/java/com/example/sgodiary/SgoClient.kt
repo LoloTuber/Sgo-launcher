@@ -69,12 +69,23 @@ class SgoClient {
     // Кэш весов оценок: заполняется в SgoWeights.kt, читается оттуда же.
     internal val weightsCache = mutableMapOf<String, List<WeightEntry>>()
 
+    // Кэш дневника по неделям (weekStart -> время и JSON).
+    // Нужен, чтобы предзагруженные недели открывались мгновенно.
+    internal val diaryCache = mutableMapOf<String, Pair<Long, String>>()
+
+    // Кэш тяжёлых ответов (успеваемость, периоды) по ключу запроса.
+    // Сборка успеваемости за термин — это десятки запросов к СГО,
+    // поэтому повторный заход на вкладку не должен снова тянуть сеть.
+    internal val jsonCache = mutableMapOf<String, Pair<Long, String>>()
+
     fun isLoggedIn() = token != null
 
     fun reset() {
         token = null
         tokenExpiresAt = 0
         synchronized(weightsCache) { weightsCache.clear() }
+        synchronized(diaryCache) { diaryCache.clear() }
+        synchronized(jsonCache) { jsonCache.clear() }
     }
 
     fun isTokenExpired(): Boolean {

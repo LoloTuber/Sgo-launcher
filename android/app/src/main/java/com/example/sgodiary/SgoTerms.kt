@@ -5,6 +5,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal fun SgoClient.getTermsJson(): String {
+    // Список периодов меняется редко — держим его в кэше на 10 минут.
+    synchronized(jsonCache) {
+        val cached = jsonCache["terms"]
+        if (cached != null && System.currentTimeMillis() - cached.first < DATA_CACHE_TTL) {
+            return cached.second
+        }
+    }
+    val result = buildTermsJson()
+    synchronized(jsonCache) { jsonCache["terms"] = Pair(System.currentTimeMillis(), result) }
+    return result
+}
+
+private fun SgoClient.buildTermsJson(): String {
     val arr = JSONArray()
     var gotRealTerms = false
 

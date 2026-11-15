@@ -1,7 +1,11 @@
 import { state } from '../state.js';
 import {
-  escapeHtml, shortDate, markCls, weekStartIso, isDebtMark, markNumber
+  escapeHtml, shortDate, markCls, weekStartIso, isDebtMark
 } from '../utils.js';
+import {
+  valueOf as numericValue, weightOf, weightedAverage, weightedSums,
+  typicalWeight, marksNeeded as neededMarks
+} from '../weights.js';
 import { isNewMark, newMarksCount } from '../changes.js';
 
 /**
@@ -18,47 +22,11 @@ import { isNewMark, newMarksCount } from '../changes.js';
 
 let selectedSubject = "all";
 
-function numericValue(mark) {
-  const value = markNumber(mark && mark.value);
-  return value != null && value >= 1 && value <= 5 ? value : null;
-}
-
-function weightOf(mark) {
-  const weight = Number(mark && mark.weight);
-  return Number.isFinite(weight) && weight > 0 ? weight : 1;
-}
-
 function marksOf(subject) {
   return (subject.marks || [])
     .filter((mark) => numericValue(mark) != null)
     .slice()
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-}
-
-function weightedAverage(marks) {
-  let sum = 0;
-  let weights = 0;
-  for (const mark of marks) {
-    const value = numericValue(mark);
-    if (value == null) continue;
-    const weight = weightOf(mark);
-    sum += value * weight;
-    weights += weight;
-  }
-  return weights ? sum / weights : null;
-}
-
-function weightedSums(marks) {
-  let sum = 0;
-  let weights = 0;
-  for (const mark of marks) {
-    const value = numericValue(mark);
-    if (value == null) continue;
-    const weight = weightOf(mark);
-    sum += value * weight;
-    weights += weight;
-  }
-  return { sum, weights };
 }
 
 function clamp(value, min, max) {
@@ -151,15 +119,15 @@ function analyzeSubject(subject) {
   };
 }
 
-/** Сколько пятёрок (вес 10) нужно, чтобы дойти до целевого среднего. */
-function marksNeeded(subject, target, markValue = 5, markWeight = 10) {
+/**
+ * Сколько пятёрок нужно, чтобы дойти до целевого среднего.
+ * Вес новой оценки — типичный для предмета, а не зашитая константа:
+ * у предмета с контрольными работами (вес 20-30) подсказка будет честнее.
+ */
+function marksNeeded(subject, target, markValue = 5) {
+  if (!subject) return null;
   const marks = marksOf(subject);
-  const { sum, weights } = weightedSums(marks);
-  if (!weights) return null;
-  const current = sum / weights;
-  if (current >= target) return 0;
-  const needed = (target * weights - sum) / (markWeight * (markValue - target));
-  return Math.max(0, Math.ceil(needed - 1e-9));
+  return neededMarks(marks, target, markValue, typicalWeight(subject));
 }
 
 function weeklySeries(subjectName) {
@@ -300,12 +268,14 @@ function renderRisk(analyses) {
   return `<div class="risk-list">${risky.map((item) => {
     let hint = "Следите за новыми оценками";
     if (item.current != null && item.current < 3.5) {
-      const needed = marksNeeded(state.grades.subjects.find((s) => s.name === item.name), 3.5);
+      const subject = state.grades.subjects.find((s) => s.name === item.name);
+      const needed = marksNeeded(subject, 3.5);
+      const weight = typicalWeight(subject);
       hint = needed == null
         ? "Средний балл ниже 3,5"
         : needed === 0
           ? "Порог 3,5 уже достигнут"
-          : `До 3,5: ${needed} «5» (вес 10)`;
+          : `До 3,5: ${needed} «5» (вес ${weight})`;
     } else if (item.dots) {
       hint = "Сначала закройте долги";
     } else if (item.slope < -0.08) {
@@ -411,9 +381,19 @@ export function renderAnalytics(data) {
   const risky = analyses.filter((item) => item.risk);
   const fresh = newMarksCount();
 
-  const predictedAverage = withMarks.length
-    ? withMarks.reduce((sum, item) => sum + (item.predictedRaw || item.current || 0), 0) / withMarks.length
-    : null;
+  // Средний балл по предметам — взвешенный: каждый предмет влияет
+  // пропорционально сумме весов своих оценок (как и остальные расчёты).
+  let predictedSum = 0;
+  let predictedWeight = 0;
+  for (const item of withMarks) {
+    const value = item.predictedRaw != null ? item.predictedRaw : item.current;
+    if (value == null) continue;
+    const { weights } = weightedSums(item.marks);
+    if (!weights) continue;
+    predictedSum += value * weights;
+    predictedWeight += weights;
+  }
+  const predictedAverage = predictedWeight ? predictedSum / predictedWeight : null;
 
   const best = withMarks.slice().sort((a, b) => (b.current || 0) - (a.current || 0))[0];
   const series = weeklySeries(selectedSubject);

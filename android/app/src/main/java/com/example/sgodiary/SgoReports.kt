@@ -102,9 +102,26 @@ private fun SgoClient.getStudentTotalHtmlOnce(termId: String?): String? {
     val fileId = awaitReportFile(taskId, queueKey) ?: return null
     Log.i("SGO_REPORT", "fileId=$fileId")
 
-    val fileReq = getBuilder(baseUrl + "files/$fileId").build()
+    // ВАЖНО: файл отчёта скачивается с токеном "at". Без него СГО
+    // отвечает {"message":"Нет доступа"} вместо HTML — отчёт не парсится.
+    val fileReq = getBuilder(baseUrl + "files/$fileId")
+        .header("at", token ?: "")
+        .build()
     val fileRes = client.newCall(fileReq).execute()
-    return fileRes.body?.string()
+    val body = fileRes.body?.string() ?: ""
+
+    // СГО иногда отдаёт вместо отчёта JSON с ошибкой — сообщаем текст ошибки,
+    // а не «таблица не найдена».
+    if (body.trimStart().startsWith("{")) {
+        val message = try {
+            JSONObject(body).optString("message")
+        } catch (e: Exception) { "" }
+        Log.w("SGO_REPORT", "СГО не отдал отчёт: ${body.take(200)}")
+        throw IllegalStateException(
+            if (message.isNotEmpty()) "СГО не отдал отчёт: $message" else "СГО не отдал отчёт"
+        )
+    }
+    return body
 }
 
 /** Ждёт в очереди SignalR готовый файл отчёта. Возвращает fileId или null. */
@@ -158,6 +175,47 @@ private fun SgoClient.awaitReportFile(taskId: Int, queueKey: String): String? {
     latch.await(30, TimeUnit.SECONDS)
     ws.close(1000, "done")
     return fileId
+}
+
+// Пробелы в отчёте СГО бывают обычные, неразрывные (nbsp), узкие и т.д.
+// В Java \s не матчит \u00A0, поэтому нормализуем пробелы явно.
+private val CELL_SPACE_REGEX = Regex("[\\s\\u00A0\\u202F\\u2007\\u2009\\u200B]+")
+// Числовая часть токена: «5», «4», «3,5» — выделяется из слипшихся «5Н».
+private val NUM_PART_REGEX = Regex("(\\d+(?:[.,]\\d+)?)")
+// Числовая оценка в ячейке отчёта.
+private val NUMERIC_MARK_REGEX = Regex("^\\d+([.,]\\d+)?$")
+// Коды пропусков в разных написаниях приводим к одному виду.
+private val CODE_ALIASES = mapOf(
+    "Н" to "Н", "НП" to "НП",
+    "УП" to "УП",
+    "Б" to "Б", "БК" to "Б",
+    "ОТ" to "ОТ", "ОП" to "ОП", "ОСВ" to "ОСВ"
+)
+
+/**
+ * Разбивает содержимое ячейки отчёта на токены оценок и кодов пропусков.
+ *
+ * СГО пишет в одной ячейке и оценку, и код пропуска, причём они могут быть
+ * разделены обычным пробелом, неразрывным (&nbsp;) или идти слитно («5Н»).
+ */
+private fun splitCellTokens(value: String): List<String> {
+    val text = CELL_SPACE_REGEX.replace(value, " ").trim()
+    if (text.isEmpty()) return emptyList()
+    val tokens = ArrayList<String>()
+    for (raw in text.split(" ")) {
+        if (raw.isEmpty()) continue
+        for (part in NUM_PART_REGEX.split(raw)) {
+            val p = part.trim()
+            if (p.isNotEmpty()) tokens.add(p)
+        }
+    }
+    return tokens
+}
+
+/** «н.п.» / «Б/К» / «НП» → канонический код пропуска. */
+internal fun normalizeAttendanceCode(token: String): String {
+    val raw = token.filter { it.isLetterOrDigit() }.uppercase()
+    return CODE_ALIASES[raw] ?: raw
 }
 
 internal fun SgoClient.parseReportHtml(html: String): String {
@@ -259,9 +317,9 @@ internal fun SgoClient.parseReportHtml(html: String): String {
             val cellText = cell.text().trim()
             if (cellText.isEmpty()) continue
             val date = dates[j]
-            for (token in cellText.split(Regex("\\s+"))) {
+            for (token in splitCellTokens(cellText)) {
                 when {
-                    Regex("^\\d+([.,]\\d+)?$").matches(token) -> {
+                    NUMERIC_MARK_REGEX.matches(token) -> {
                         val valStr = token.replace(",", ".")
                         val mJson = JSONObject().apply {
                             put("value", valStr); put("date", date); put("topic", "Оценка")
@@ -280,16 +338,20 @@ internal fun SgoClient.parseReportHtml(html: String): String {
                             put("type", ""); put("weight", 1)
                         }
                         subjectsMap.getOrPut(subjectName) { mutableListOf() }.add(mJson)
+                        // Долг в расчёте среднего равен «2» (вес уточним из дневника).
+                        totalMarks++; allSum += DEBT_MARK_VALUE
                     }
-                    token.uppercase() in ATTENDANCE_CODES.keys || token.all { it.isLetter() } -> {
-                        val code = token.uppercase()
-                        val isCounted = !NOT_ABSENCE_CODES.contains(code)
-                        absences.put(JSONObject().apply {
-                            put("date", date); put("code", code)
-                            put("label", ATTENDANCE_CODES[code] ?: code)
-                            put("subject", subjectName); put("counted", isCounted)
-                        })
-                        if (isCounted) absentCounts[code] = (absentCounts[code] ?: 0) + 1
+                    else -> {
+                        val code = normalizeAttendanceCode(token)
+                        if (code.isNotEmpty() && code.length <= 4 && code.all { it.isLetter() }) {
+                            val isCounted = !NOT_ABSENCE_CODES.contains(code)
+                            absences.put(JSONObject().apply {
+                                put("date", date); put("code", code)
+                                put("label", ATTENDANCE_CODES[code] ?: code)
+                                put("subject", subjectName); put("counted", isCounted)
+                            })
+                            if (isCounted) absentCounts[code] = (absentCounts[code] ?: 0) + 1
+                        }
                     }
                 }
             }
@@ -311,17 +373,20 @@ internal fun SgoClient.parseReportHtml(html: String): String {
         marks.sortByDescending { it.optString("date") }
         var sum = 0.0; var wSum = 0
         for (m in marks) {
-            val v = m.optDouble("value")
-            if (v > 0) {
-                sum += v * m.optInt("weight", 1)
-                wSum += m.optInt("weight", 1)
-            }
+            val v = markNumber(m.optString("value")) ?: continue
+            val w = m.optInt("weight", 1).coerceAtLeast(1)
+            sum += v * w
+            wSum += w
         }
+        val weighted = if (wSum > 0) round2(sum / wSum) else 0.0
         val tail = tailsMap[name]
         subjsArr.put(JSONObject().apply {
             put("name", name)
             put("marks", JSONArray(marks))
-            put("average", if (wSum > 0) round2(sum / wSum) else 0.0)
+            put("average", weighted)
+            // Собственное взвешенное среднее (веса уточняются из дневника).
+            put("weightedAverage", weighted)
+            put("weight", wSum)
             put("count", marks.size)
             put("marksCount", marks.size)
             if (tail != null) {
@@ -336,6 +401,8 @@ internal fun SgoClient.parseReportHtml(html: String): String {
     attJson.put("items", absences)
     attJson.put("counts", JSONObject(absentCounts as Map<*, *>))
     attJson.put("total", absentCounts.values.sum())
+    // Отчёт разобран — данные о посещаемости доступны (пусто = пропусков нет).
+    attJson.put("available", true)
     response.put("attendance", attJson)
     response.put("days", JSONArray(dates))
 

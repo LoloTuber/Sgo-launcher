@@ -147,6 +147,13 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                 retryOnAuth {
                     when {
                         uri.startsWith("/api/quick") -> client.getQuickJson()
+                        uri.startsWith("/api/diary/preload") -> {
+                            // Предзагрузка соседних недель: отвечаем сразу,
+                            // сами данные клиент кладёт в кэш в фоне.
+                            val weeks = query["weeks"]?.firstOrNull()?.toIntOrNull() ?: 2
+                            client.preloadDiary(weeks.coerceIn(1, 4))
+                            JSONObject().put("ok", true).put("started", true).toString()
+                        }
                         uri.startsWith("/api/diary") -> client.getDiaryJson(weekStart)
                         uri.startsWith("/api/schedule") -> client.getScheduleJson(weekStart)
                         uri.startsWith("/api/results") -> client.getResultsJson(termId, mode)
@@ -163,6 +170,7 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                 return newFixedLengthResponse(Response.Status.UNAUTHORIZED, "application/json",
                     "{\"ok\":false, \"error\":\"Сессия истекла, войдите заново\"}")
             } catch (e: Exception) {
+                Log.w("SGO_SERVER", "Ошибка запроса $uri: ${e.message}", e)
                 return newFixedLengthResponse(
                     Response.Status.INTERNAL_ERROR,
                     "application/json",

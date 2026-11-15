@@ -1,15 +1,17 @@
 import { state } from './js/state.js';
 import * as api from './js/api.js';
-import { escapeHtml, prettyDateTime, toast, localIsoDate, weekStartIso } from './js/utils.js';
-import { applyUiSettings, bindSettingsControls } from './js/settings.js';
-import { refreshChanges, clearChanges } from './js/changes.js';
+import { escapeHtml, prettyDateTime, toast, localIsoDate, weekStartIso, addDaysIso } from './js/utils.js';
+import { applyUiSettings, bindSettingsControls, getSettings, syncNativeSettings, applySettingsToControls } from './js/settings.js';
+import { refreshChanges, clearChanges, markAllRead } from './js/changes.js';
+import { storageGet, storageSet } from './js/storage.js';
+import { scheduleFromDiary, homeworkFromDiary } from './js/derive.js';
 
-import { renderHeader } from './js/views/header.js';
+import { renderHeader, renderHeaderAverage } from './js/views/header.js';
 import { renderHomework } from './js/views/homework.js';
-import { renderDiary } from './js/views/diary.js';
+import { renderDiary, highlightDiaryDate } from './js/views/diary.js';
 import { renderScheduleData, updateScheduleStatus } from './js/views/schedule.js';
 import { renderGrades, renderResults, renderAttendance } from './js/views/grades.js';
-import { renderCalculator } from './js/views/calculator.js';
+import { renderCalculator, restoreCalcState, clearCalcState } from './js/views/calculator.js';
 import { renderAnalytics } from './js/views/analytics.js';
 import { renderToday, updateTodayLive } from './js/views/today.js';
 
@@ -27,39 +29,255 @@ function lsRemove(key) {
 }
 
 // --- Надёжное хранилище: localStorage + мосты PyWebView/Android ---
-// localStorage может быть недоступен (private_mode, file://, смена порта).
-// Пишем параллельно в localStorage и нативный мост, читаем с приоритетом
-// нативного значения, если localStorage пуст.
-async function storageGet(key) {
-  try {
-    const v = localStorage.getItem(key);
-    if (v !== null) return v;
-  } catch (_) { /* localStorage недоступен */ }
-  try {
-    if (window.pywebview?.api?.get_setting) {
-      return await window.pywebview.api.get_setting(key);
-    }
-  } catch (_) { /* мост недоступен */ }
-  try {
-    if (window.AndroidSettings?.get) {
-      return window.AndroidSettings.get(key);
-    }
-  } catch (_) { /* мост недоступен */ }
-  return null;
+// Живёт в js/storage.js: им же пользуется калькулятор, чтобы сохранять
+// своё состояние между запусками.
+
+// --- Кэш последних успешно загруженных данных (Stale-While-Revalidate) ---
+// Данные кладём в то же надёжное хранилище, что и настройки. Префикс
+// sgo.cache. позволяет одной операцией очистить всё при выходе из аккаунта.
+const CACHE_PREFIX = "sgo.cache.";
+
+function cacheStorageKey(key) {
+  return `${CACHE_PREFIX}${key}`;
 }
 
-async function storageSet(key, value) {
-  try { localStorage.setItem(key, value); } catch (_) { /* ignore */ }
+async function saveCache(key, data) {
+  if (!key || data == null) return;
+  // Пользователь может отключить офлайн-режим в настройках.
+  if (!getSettings().cacheEnabled) return;
   try {
-    if (window.pywebview?.api?.set_setting) {
-      await window.pywebview.api.set_setting(key, value);
-    }
-  } catch (_) { /* ignore */ }
+    // Храним дату сохранения рядом с данными, чтобы футер мог показать
+    // «Данные сохранены: …», а не время последнего ответа сервера.
+    const payload = { savedAt: new Date().toISOString(), data };
+    await storageSet(cacheStorageKey(key), JSON.stringify(payload));
+  } catch (e) {
+    // Кэш — необязательная оптимизация, его сбой не должен ломать экран.
+    console.warn("saveCache failed:", key, e);
+  }
+}
+
+async function loadCache(key) {
+  if (!key) return null;
   try {
-    if (window.AndroidSettings?.set) {
-      window.AndroidSettings.set(key, value);
+    const raw = await storageGet(cacheStorageKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    // Текущий формат: { savedAt, data }. Старый формат (просто data)
+    // тоже читаем, чтобы обновление не сбрасывало уже сохранённый кэш.
+    if ("savedAt" in parsed && "data" in parsed) {
+      const data = parsed.data;
+      if (data && typeof data === "object") {
+        try {
+          Object.defineProperty(data, "__cachedAt", {
+            value: parsed.savedAt,
+            enumerable: false,
+            configurable: true,
+          });
+        } catch (_) { /* замороженный объект — обойдёмся без даты */ }
+      }
+      return data;
     }
-  } catch (_) { /* ignore */ }
+
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Дата, когда снимок был положен в кэш (с запасным вариантом для старых записей). */
+function cacheSavedAt(data) {
+  return (data && data.__cachedAt) || (data && data.updated) || new Date().toISOString();
+}
+
+/** Удаляет все ключи кэша из localStorage и нативного хранилища. */
+async function clearCache() {
+  const keys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(CACHE_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch (_) { /* localStorage недоступен */ }
+
+  // На Android у моста есть remove. На PyWebView/старых сборках его может
+  // не быть — тогда записываем пустую строку, чтобы кэш не прочитался снова.
+  for (const key of keys) {
+    try {
+      if (window.pywebview?.api?.set_setting) {
+        await window.pywebview.api.set_setting(key, "");
+      }
+    } catch (_) { /* ignore */ }
+    try {
+      if (window.AndroidSettings?.remove) window.AndroidSettings.remove(key);
+    } catch (_) { /* ignore */ }
+  }
+}
+
+const OFFLINE_MESSAGE = "⚠️ Нет соединения. Показаны сохранённые данные";
+
+// Кэш старше этого времени считаем устаревшим и сообщаем об этом.
+const CACHE_STALE_MS = 30 * 60 * 1000;
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+/** Возраст снимка кэша в миллисекундах (null, если дату не удалось прочитать). */
+function cacheAgeMs(data) {
+  const saved = Date.parse(cacheSavedAt(data));
+  return Number.isFinite(saved) ? Math.max(0, Date.now() - saved) : null;
+}
+
+function formatCacheAge(data) {
+  const ms = cacheAgeMs(data);
+  if (ms === null) return "";
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "только что";
+  if (minutes < 60) return `${minutes} ${plural(minutes, "минуту", "минуты", "минут")} назад`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${plural(hours, "час", "часа", "часов")} назад`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${plural(days, "день", "дня", "дней")} назад`;
+}
+
+function isCacheStale(data) {
+  const ms = cacheAgeMs(data);
+  return ms !== null && ms >= CACHE_STALE_MS;
+}
+
+function setBanner(kind, text) {
+  const banner = document.querySelector("#banner");
+  if (!banner) return;
+  banner.textContent = text;
+  banner.hidden = false;
+  banner.classList.toggle("is-info", kind === "info");
+  banner.dataset.cacheNotice = kind;
+}
+
+/** Офлайн: показываем, сколько времени сохранённому снимку, если он старый. */
+function showOfflineBanner(data) {
+  const suffix = data && isCacheStale(data)
+    ? ` (сохранены ${formatCacheAge(data)})`
+    : "";
+  setBanner("offline", `${OFFLINE_MESSAGE}${suffix}.`);
+}
+
+/** Онлайн, но кэш устарел: сообщаем возраст и что обновление идёт в фоне. */
+function showStaleBanner(data) {
+  const age = formatCacheAge(data);
+  setBanner(
+    "info",
+    `🕓 Показаны сохранённые данные${age ? `: сохранены ${age}` : ""}. Обновляем…`
+  );
+}
+
+function showErrorBanner(message) {
+  const banner = document.querySelector("#banner");
+  if (!banner) return;
+  banner.textContent = message;
+  banner.hidden = false;
+  banner.classList.remove("is-info");
+  delete banner.dataset.cacheNotice;
+}
+
+function clearOfflineBanner() {
+  const banner = document.querySelector("#banner");
+  if (!banner || !banner.dataset.cacheNotice) return;
+  banner.hidden = true;
+  banner.textContent = "";
+  banner.classList.remove("is-info");
+  delete banner.dataset.cacheNotice;
+}
+
+// --- Таймауты запросов ---
+/**
+ * Не даёт одному зависшему запросу заблокировать отрисовку интерфейса.
+ * Сам запрос продолжается в фоне и может дорисовать данные позже.
+ */
+function withTimeout(promise, ms, fallback) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+
+/**
+ * Запуск приложения после успешного входа/проверки авторизации.
+ * Порядок важен: сначала главное, затем отчёты, затем дневник и расписание.
+ */
+async function startApp(options = {}) {
+  const useCache = options.useCache !== false;
+  state.authenticated = true;
+  await restoreCalcState();
+
+  // Мгновенный путь: всё, что уже есть в кэше, показываем сразу,
+  // не дожидаясь ни одного сетевого запроса.
+  if (useCache && await hydrateOnce()) {
+    revealCachedApp();
+    return;
+  }
+
+  // Кэша нет — грузим волнами. Экрана загрузки нет: панели показывают
+  // скелетоны, а прочие вкладки остаются доступными.
+  try {
+    await withTimeout(loadQuick(), 12000, null);
+  } catch (_) {
+    /* ошибка уже показана в баннере */
+  }
+
+  await withTimeout(loadTerms(), 8000, null);
+  const [gradesResult, resultsResult] = await Promise.allSettled([
+    withTimeout(loadGrades(true), 15000, null),
+    withTimeout(loadResults(true), 15000, null),
+  ]);
+  const gradesOk = gradesResult.status === "fulfilled" && !!gradesResult.value;
+  const resultsOk = resultsResult.status === "fulfilled" && !!resultsResult.value;
+
+  const week = weekStartIso(localIsoDate());
+  const [diaryResult, scheduleResult] = await Promise.allSettled([
+    withTimeout(loadDiary(week), 15000, null),
+    withTimeout(loadSchedule(week), 15000, null),
+  ]);
+  const diaryOk = diaryResult.status === "fulfilled" && !!diaryResult.value;
+  const scheduleOk = scheduleResult.status === "fulfilled" && !!scheduleResult.value;
+
+  // На выходных ближайший учебный день уже в следующей неделе.
+  const todayIso = localIsoDate();
+  const dayOfWeek = new Date().getDay();
+  const todayDay = state.schedule && Array.isArray(state.schedule.days)
+    ? state.schedule.days.find((day) => day.date === todayIso)
+    : null;
+  const todayHasLessons = !!(todayDay && (todayDay.lessons || [])
+    .some((lesson) => String(lesson.subject || "").trim()));
+  if (dayOfWeek === 0 || dayOfWeek === 6 || (dayOfWeek === 5 && !todayHasLessons)) {
+    await withTimeout(loadNextWeekSchedule(), 12000, null);
+  }
+
+  selectTab(state.tab);
+  renderToday();
+
+  if (!(gradesOk || resultsOk) || !(diaryOk || scheduleOk)) {
+    toast("Часть данных не загрузилась");
+  }
+}
+
+/** Глобальное действие «Отметить всё прочитанным» из шапки. */
+function markEverythingRead() {
+  markAllRead();
+  window.dispatchEvent(new CustomEvent("sgo:changes-read"));
+  renderToday();
+  toast("Отмечено прочитанным");
 }
 
 // --- Тема ---
@@ -91,6 +309,15 @@ let _reconcileDone = false;
 async function reconcileFromNative() {
   if (_reconcileDone) return;
   try {
+    // Настройки фонового режима могли быть изменены нативно:
+    // переключателем в трее (ПК) или сервисом (Android). Нативное значение главное.
+    try {
+      if (await syncNativeSettings()) {
+        applySettingsToControls();
+        applyUiSettings();
+      }
+    } catch (e) { /* нативное хранилище недоступно */ }
+
     const [theme, color] = await Promise.all([
       storageGet("sgo.theme"),
       storageGet("sgo.colorTheme"),
@@ -124,6 +351,23 @@ function toggleTheme() {
   const icon = document.querySelector("#theme-icon");
   if (icon) icon.textContent = isDark ? "☀️" : "🌙";
   storageSet("sgo.theme", isDark ? "dark" : "light");
+}
+
+/**
+ * Включает/выключает автозапуск вместе с Windows.
+ *
+ * На Android такого нет — там просто ничего не делаем.
+ */
+async function notifyAutostart(enabled) {
+  try {
+    if (window.pywebview?.api?.set_autostart) {
+      await window.pywebview.api.set_autostart(enabled);
+      toast(enabled ? "Автозапуск включён" : "Автозапуск выключен");
+      return;
+    }
+  } catch (e) {
+    console.warn("Не удалось изменить автозапуск:", e);
+  }
 }
 
 // --- Настройки (скрытие вкладок + цветовая тема) ---
@@ -166,11 +410,24 @@ function initSettings() {
       try {
         await fetch('/api/logout', { method: 'POST' });
 
+        // Данные предыдущего аккаунта не должны оставаться на устройстве.
+        await clearCache();
+        await clearCalcState();
+        hydratePromise = null;
+        appRevealed = false;
+        clearOfflineBanner();
+        quickRequestId += 1;
+        gradesRequestId += 1;
+        resultsRequestId += 1;
+        diaryRequestId += 1;
+        scheduleRequestId += 1;
+
         state.quick = null;
         state.grades = null;
         state.results = null;
         state.diary = null;
         state.schedule = null;
+        state.nextSchedule = null;
         state.quickPromise = null;
         state.gradesPromise = null;
         state.resultsPromise = null;
@@ -246,9 +503,54 @@ function initSettings() {
       if (state.schedule) renderScheduleData(state.schedule);
     } else if (name === "todayOnly") {
       if (state.schedule) renderScheduleData(state.schedule);
+    } else if (name === "autostart") {
+      // Автозапуск включает/выключает нативная часть — сообщаем ей.
+      notifyAutostart(!!getSettings().autostart);
     }
     if (state.tab === "today") renderToday();
   });
+
+  // Автозапуск есть только в версии для компьютера.
+  const autostartRow = document.querySelector("#setting-autostart-row");
+  const autostartHint = document.querySelector("#setting-autostart-hint");
+  const isDesktop = !!window.pywebview?.api;
+  if (!isDesktop && autostartRow) autostartRow.hidden = true;
+  if (!isDesktop && autostartHint) autostartHint.hidden = false;
+
+  // Нативная часть (трей на ПК, сервис на Android) могла поменять настройки —
+  // подхватываем их и обновляем окно настроек.
+  window.addEventListener("sgo:sync-settings", async () => {
+    const changed = await syncNativeSettings();
+    if (changed) {
+      applySettingsToControls();
+      applyUiSettings();
+    }
+  });
+
+  // Фоновая проверка нашла новое — тихо обновляем открытые экраны.
+  window.addEventListener("sgo:data-updated", () => {
+    if (!state.authenticated) return;
+    loadDiary();
+    loadGrades(true);
+    loadQuick(true);
+  });
+
+  // --- СОХРАНЕНИЕ ДАННЫХ ---
+  const clearCacheBtn = document.querySelector("#clear-cache-btn");
+  if (clearCacheBtn) {
+    clearCacheBtn.addEventListener("click", async () => {
+      await clearCache();
+      toast("Сохранённые данные очищены");
+    });
+  }
+
+  const clearChangesBtn = document.querySelector("#clear-changes-btn");
+  if (clearChangesBtn) {
+    clearChangesBtn.addEventListener("click", () => {
+      clearChanges();
+      toast("Отметки «новое» сброшены");
+    });
+  }
 
   // Если сохранённая активная вкладка скрыта — открываем первую видимую.
   ensureVisibleTab();
@@ -274,97 +576,495 @@ function ensureVisibleTab() {
 }
 
 // --- Загрузка данных ---
-async function loadQuick(force) {
+// Все экраны работают по схеме Stale-While-Revalidate:
+//   1) мгновенно показываем кэш (если он есть);
+//   2) запрашиваем свежие данные;
+//   3) обновляем экран и перезаписываем кэш.
+// При сетевой ошибке кэш остаётся на экране, а сверху появляется баннер.
+
+const gradesCacheKey = (term) => `grades.${term || "current"}`;
+const resultsCacheKey = (term, mode) => `results.${mode}.${term || "year"}`;
+const diaryCacheKey = (week) => `diary.${week || "current"}`;
+const scheduleCacheKey = (week) => `schedule.${week || "current"}`;
+
+/**
+ * Догружаем то, чего не хватило, из дневника.
+ *
+ * В дневнике уже есть уроки, домашнее задание и отметки. Поэтому, если
+ * отдельный запрос не прошёл (сервер не ответил или вкладку не открывали),
+ * расписание и ДЗ можно показать из дневника, а новые оценки — посчитать
+ * по его отметкам.
+ */
+function applyDiaryDerived() {
+  const diary = state.diary;
+  if (!diary) return false;
+  let changed = false;
+
+  if (!state.schedule) {
+    const derived = scheduleFromDiary(diary);
+    if (derived) {
+      state.schedule = derived;
+      state.scheduleWeek = derived.weekStart;
+      renderScheduleData(derived);
+      changed = true;
+    }
+  }
+
+  if (!state.quick || !state.quick.homework) {
+    const homework = homeworkFromDiary(diary, addDaysIso(localIsoDate(), 1));
+    if (homework) {
+      renderHomework(homework);
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function renderQuickData(data, fromCache = false) {
+  state.quick = data;
+  refreshChanges();
+  renderHeader(data.student);
+  renderHomework(data.homework);
+  renderResults(data.results);
+  if (state.tab === "today") renderToday();
+  const updated = document.querySelector("#updated");
+  if (updated) {
+    updated.textContent = fromCache
+      ? `Данные сохранены: ${prettyDateTime(cacheSavedAt(data))}`
+      : `Обновлено: ${prettyDateTime(data.updated)}`;
+  }
+}
+
+function renderGradesData(data) {
+  state.grades = data;
+  refreshChanges();
+  renderHeaderAverage();
+  renderGrades(data);
+  renderAttendance(data);
+  renderAnalytics(data);
+  renderCalculator(data);
+  if (state.tab === "today") renderToday();
+}
+
+let quickRequestId = 0;
+let gradesRequestId = 0;
+let resultsRequestId = 0;
+let diaryRequestId = 0;
+let scheduleRequestId = 0;
+
+function loadQuick(force) {
   if (state.quickPromise && !force) return state.quickPromise;
-  state.quickPromise = api.getQuick()
-    .then((data) => {
-      state.quick = data;
-      refreshChanges();
-      renderHeader(data.student);
-      renderHomework(data.homework);
-      renderResults(data.results);
-      if (state.tab === "today") renderToday();
-      document.querySelector("#updated").textContent = `Обновлено: ${prettyDateTime(data.updated)}`;
+  const requestId = ++quickRequestId;
+
+  const promise = (async () => {
+    let cached = null;
+    if (!state.quick) {
+      cached = await loadCache("quick");
+      if (requestId !== quickRequestId) return null;
+      // Проверяем минимальную форму ответа, чтобы старый/битый кэш
+      // не уронил рендер. Если форма не та — просто идём в сеть.
+      if (!cached || !cached.homework || !cached.student) cached = null;
+      if (cached) renderQuickData(cached, true);
+    }
+
+    try {
+      const data = await api.getQuick();
+      await saveCache("quick", data);
+      if (requestId !== quickRequestId) return null;
+      renderQuickData(data);
+      clearOfflineBanner();
       return data;
-    })
-    .catch((err) => {
-      document.querySelector("#banner").textContent = err.message;
-      document.querySelector("#banner").hidden = false;
-      document.querySelector("#hw-list").innerHTML = `<div class="empty"><strong>Не удалось загрузить</strong>${escapeHtml(err.message)}</div>`;
+    } catch (err) {
+      if (requestId !== quickRequestId) return null;
+      if (state.quick || cached) {
+        showOfflineBanner(state.quick || cached);
+        return state.quick || cached;
+      }
+      // «Быстрых» данных нет — ДЗ и расписание берём из дневника.
+      if (applyDiaryDerived()) {
+        showOfflineBanner(state.diary);
+        return null;
+      }
+      showErrorBanner(err.message);
+      const hwList = document.querySelector("#hw-list");
+      if (hwList) {
+        hwList.innerHTML = `<div class="empty"><strong>Не удалось загрузить</strong>${escapeHtml(err.message)}</div>`;
+      }
       throw err;
-    })
-    .finally(() => { state.quickPromise = null; });
-  return state.quickPromise;
+    }
+  })();
+
+  state.quickPromise = promise;
+  const reset = () => {
+    if (state.quickPromise === promise) state.quickPromise = null;
+  };
+  promise.then(reset, reset);
+  return promise;
 }
 
 function loadGrades(force) {
   if (state.gradesPromise && !force) return state.gradesPromise;
-  const list = document.querySelector("#grades-list");
-  if (!state.grades) {
-    list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
-  }
-  const term = document.querySelector("#term-select").value || "";
 
-  state.gradesPromise = api.getGrades(term)
-    .then((data) => {
-      state.grades = data;
-      refreshChanges();
-      renderGrades(data);
-      renderAttendance(data);
-      renderAnalytics(data);
-      renderCalculator(data);
-      if (state.tab === "today") renderToday();
+  const list = document.querySelector("#grades-list");
+  const term = document.querySelector("#term-select").value || "";
+  const cacheKey = gradesCacheKey(term);
+  const requestId = ++gradesRequestId;
+
+  const promise = (async () => {
+    let cached = null;
+    if (!state.grades) {
+      cached = await loadCache(cacheKey);
+      if (requestId !== gradesRequestId) return null;
+      // Если период ещё неизвестен (список периодов не загрузился),
+      // показываем последний сохранённый снимок оценок.
+      if (!cached && !term) {
+        const latest = await loadCache("grades.latest");
+        if (requestId !== gradesRequestId) return null;
+        if (latest && latest.data) cached = latest.data;
+      }
+      if (cached) {
+        renderGradesData(cached);
+      } else if (list) {
+        list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+      }
+    }
+
+    try {
+      const data = await api.getGrades(term);
+      await saveCache(cacheKey, data);
+      await saveCache("grades.latest", { termId: term, data });
+      if (requestId !== gradesRequestId) return null;
+      renderGradesData(data);
+      clearOfflineBanner();
       return data;
-    })
-    .catch((err) => {
-      const b = document.querySelector("#banner");
-      b.textContent = `${err.message}\nОценки могут быть неполными.`;
-      b.hidden = false;
-      if (!state.grades) {
+    } catch (err) {
+      if (requestId !== gradesRequestId) return null;
+      if (state.grades || cached) {
+        showOfflineBanner(state.quick || state.grades || cached);
+        return state.grades || cached;
+      }
+      showErrorBanner(`${err.message}\nОценки могут быть неполными.`);
+      if (list) {
         list.innerHTML = `<div class="empty"><strong>Оценки недоступны</strong>${escapeHtml(err.message)}</div>`;
       }
       return null;
-    })
-    .finally(() => { state.gradesPromise = null; });
-  return state.gradesPromise;
+    }
+  })();
+
+  state.gradesPromise = promise;
+  const reset = () => {
+    if (state.gradesPromise === promise) state.gradesPromise = null;
+  };
+  promise.then(reset, reset);
+  return promise;
 }
 
 function loadDiary(weekIso) {
+  const cacheWeek = weekStartIso(weekIso || localIsoDate()) || weekIso || "current";
+  const cacheKey = diaryCacheKey(cacheWeek);
   const list = document.querySelector("#diary-list");
-  list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+  const requestId = ++diaryRequestId;
 
-  state.diaryPromise = api.getDiary(weekIso)
-    .then((data) => {
+  const promise = (async () => {
+    let cached = null;
+    if (!state.diary || state.diary.weekStart !== cacheWeek) {
+      cached = await loadCache(cacheKey);
+      if (requestId !== diaryRequestId) return null;
+      if (cached) {
+        state.diary = cached;
+        state.currentWeek = cached.weekStart || cacheWeek;
+        refreshChanges();
+        renderDiary(cached);
+        if (state.tab === "today") renderToday();
+      } else if (list) {
+        list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+      }
+    }
+
+    try {
+      const data = await api.getDiary(weekIso);
+      await saveCache(diaryCacheKey(data.weekStart || cacheWeek), data);
+      if (requestId !== diaryRequestId) return null;
       state.diary = data;
       state.currentWeek = data.weekStart;
       refreshChanges();
       renderDiary(data);
+      applyDiaryDerived();
       if (state.tab === "today") renderToday();
+      clearOfflineBanner();
       return data;
-    })
-    .catch((err) => {
-      list.innerHTML = `<div class="empty"><strong>Ошибка дневника</strong>${escapeHtml(err.message)}</div>`;
-    });
-  return state.diaryPromise;
+    } catch (err) {
+      if (requestId !== diaryRequestId) return null;
+      const hasCurrent = state.diary && state.diary.weekStart === cacheWeek;
+      if (cached || hasCurrent) {
+        showOfflineBanner(state.quick || state.diary || cached);
+        return state.diary || cached;
+      }
+      if (list) {
+        list.innerHTML = `<div class="empty"><strong>Ошибка дневника</strong>${escapeHtml(err.message)}</div>`;
+      }
+      return null;
+    }
+  })();
+
+  state.diaryPromise = promise;
+  const reset = () => {
+    if (state.diaryPromise === promise) state.diaryPromise = null;
+  };
+  promise.then(reset, reset);
+  return promise;
 }
 
 function loadSchedule(weekIso) {
+  const cacheWeek = weekStartIso(weekIso || localIsoDate()) || weekIso || "current";
+  const cacheKey = scheduleCacheKey(cacheWeek);
   const list = document.querySelector("#schedule-content");
-  list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div>`;
+  const requestId = ++scheduleRequestId;
 
-  state.schedulePromise = api.getSchedule(weekIso)
-    .then((data) => {
+  const promise = (async () => {
+    let cached = null;
+    if (!state.schedule || state.schedule.weekStart !== cacheWeek) {
+      cached = await loadCache(cacheKey);
+      if (requestId !== scheduleRequestId) return null;
+      if (cached) {
+        state.schedule = cached;
+        state.scheduleWeek = cached.weekStart || cacheWeek;
+        refreshChanges();
+        renderScheduleData(cached);
+        if (state.tab === "today") renderToday();
+      } else if (list) {
+        list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div>`;
+      }
+    }
+
+    try {
+      const data = await api.getSchedule(weekIso);
+      await saveCache(scheduleCacheKey(data.weekStart || cacheWeek), data);
+      if (requestId !== scheduleRequestId) return null;
       state.schedule = data;
       state.scheduleWeek = data.weekStart;
       refreshChanges();
       renderScheduleData(data);
       if (state.tab === "today") renderToday();
+      clearOfflineBanner();
       return data;
-    })
-    .catch((err) => {
-      list.innerHTML = `<div class="empty"><strong>Ошибка расписания</strong>${escapeHtml(err.message)}</div>`;
-    });
-  return state.schedulePromise;
+    } catch (err) {
+      if (requestId !== scheduleRequestId) return null;
+      const hasCurrent = state.schedule && state.schedule.weekStart === cacheWeek;
+      if (cached || hasCurrent) {
+        showOfflineBanner(state.quick || state.schedule || cached);
+        return state.schedule || cached;
+      }
+      // Расписание не пришло — покажем уроки из дневника, если он есть.
+      if (applyDiaryDerived()) {
+        showOfflineBanner(state.quick || state.diary);
+        return state.schedule;
+      }
+      if (list) {
+        list.innerHTML = `<div class="empty"><strong>Ошибка расписания</strong>${escapeHtml(err.message)}</div>`;
+      }
+      return null;
+    }
+  })();
+
+  state.schedulePromise = promise;
+  const reset = () => {
+    if (state.schedulePromise === promise) state.schedulePromise = null;
+  };
+  promise.then(reset, reset);
+  return promise;
+}
+
+/**
+ * Догружает расписание следующей недели. Нужно на выходных, когда
+ * ближайший учебный день уже не входит в текущую неделю.
+ */
+async function loadNextWeekSchedule() {
+  const nextWeek = addDaysIso(weekStartIso(localIsoDate()), 7);
+  const cacheKey = scheduleCacheKey(nextWeek);
+
+  let cached = await loadCache(cacheKey);
+  if (cached && cached.weekStart === nextWeek) {
+    state.nextSchedule = cached;
+  }
+
+  try {
+    const data = await api.getSchedule(nextWeek);
+    await saveCache(scheduleCacheKey(data.weekStart || nextWeek), data);
+    state.nextSchedule = data;
+    return data;
+  } catch (err) {
+    if (state.nextSchedule) {
+      showOfflineBanner(state.quick || state.nextSchedule);
+      return state.nextSchedule;
+    }
+    return null;
+  }
+}
+
+/**
+ * Читает кэш всех разделов и сразу отрисовывает их, не трогая сеть.
+ * Возвращает true, если удалось показать хотя бы часть данных.
+ */
+async function hydrateFromCache() {
+  const week = weekStartIso(localIsoDate());
+  const nextWeek = addDaysIso(week, 7);
+
+  // Симуляция калькулятора тоже должна пережить перезапуск.
+  await restoreCalcState();
+
+  // Список периодов нужен до оценок: от него зависит ключ кэша.
+  const termsCache = await loadCache("terms");
+  const terms = termsCache && Array.isArray(termsCache.terms) ? termsCache.terms : [];
+  if (terms.length) applyTerms(terms);
+
+  const termEl = document.querySelector("#term-select");
+  const term = termEl ? termEl.value : "";
+  const resultsModeEl = document.querySelector("#results-mode-select");
+  const resultsMode = resultsModeEl && resultsModeEl.value === "year" ? "year" : "current";
+  const resultsTerm = resultsMode === "year" ? "" : term;
+
+  const [quick, grades, gradesLatest, results, resultsLatest, diary, schedule, nextSchedule] =
+    await Promise.all([
+      loadCache("quick"),
+      loadCache(gradesCacheKey(term)),
+      loadCache("grades.latest"),
+      loadCache(resultsCacheKey(resultsTerm, resultsMode)),
+      loadCache(`results.latest.${resultsMode}`),
+      loadCache(diaryCacheKey(week)),
+      loadCache(scheduleCacheKey(week)),
+      loadCache(scheduleCacheKey(nextWeek)),
+    ]);
+
+  let hasAny = false;
+
+  // Каждый блок отдельно: битый снимок не должен скрыть остальные.
+  if (quick && quick.student && quick.homework) {
+    try {
+      renderQuickData(quick, true);
+      hasAny = true;
+    } catch (e) {
+      console.warn("Не удалось восстановить главное из кэша", e);
+    }
+  }
+
+  const gradesData = grades || (gradesLatest && gradesLatest.data);
+  if (gradesData) {
+    try {
+      renderGradesData(gradesData);
+      hasAny = true;
+    } catch (e) {
+      console.warn("Не удалось восстановить оценки из кэша", e);
+    }
+  }
+
+  const resultsData = results || (resultsLatest && resultsLatest.data);
+  if (resultsData) {
+    try {
+      state.results = resultsData;
+      renderResults(resultsData);
+      hasAny = true;
+    } catch (e) {
+      console.warn("Не удалось восстановить итоги из кэша", e);
+    }
+  }
+
+  if (diary && Array.isArray(diary.days)) {
+    try {
+      state.diary = diary;
+      state.currentWeek = diary.weekStart || week;
+      refreshChanges();
+      renderDiary(diary);
+      hasAny = true;
+    } catch (e) {
+      console.warn("Не удалось восстановить дневник из кэша", e);
+    }
+  }
+
+  if (schedule && Array.isArray(schedule.days)) {
+    try {
+      state.schedule = schedule;
+      state.scheduleWeek = schedule.weekStart || week;
+      refreshChanges();
+      renderScheduleData(schedule);
+      hasAny = true;
+    } catch (e) {
+      console.warn("Не удалось восстановить расписание из кэша", e);
+    }
+  }
+
+  if (nextSchedule && Array.isArray(nextSchedule.days)) {
+    state.nextSchedule = nextSchedule;
+  }
+
+  // Сообщение о возрасте кэша — только если он действительно старый.
+  const ageSource = quick || diary || schedule;
+  if (ageSource && isCacheStale(ageSource)) showStaleBanner(ageSource);
+
+  return hasAny;
+}
+
+let hydratePromise = null;
+function hydrateOnce() {
+  if (!hydratePromise) hydratePromise = hydrateFromCache();
+  return hydratePromise;
+}
+
+let appRevealed = false;
+/** Показывает приложение с уже отрисованным кэшем и запускает фоновое обновление. */
+function revealCachedApp() {
+  if (appRevealed) return;
+  appRevealed = true;
+  state.authenticated = true;
+  selectTab(state.tab);
+  renderToday();
+  revalidateAll();
+}
+
+/** Тихое обновление в фоне: экран уже показан, сеть ничего не блокирует. */
+function revalidateAll() {
+  const todayIso = localIsoDate();
+  const week = weekStartIso(todayIso);
+  const dayOfWeek = new Date().getDay();
+  const todayDay = state.schedule && Array.isArray(state.schedule.days)
+    ? state.schedule.days.find((day) => day.date === todayIso)
+    : null;
+  const todayHasLessons = !!(todayDay && (todayDay.lessons || [])
+    .some((lesson) => String(lesson.subject || "").trim()));
+  const needNextWeek = dayOfWeek === 0 || dayOfWeek === 6
+    || (dayOfWeek === 5 && !todayHasLessons);
+
+  const tasks = [];
+  if (!state.quickPromise) tasks.push(loadQuick());
+  if (!state.gradesPromise) tasks.push(loadGrades());
+  if (!state.resultsPromise) tasks.push(loadResults());
+  if (!state.diaryPromise) tasks.push(loadDiary(state.currentWeek || week));
+  if (!state.schedulePromise) tasks.push(loadSchedule(state.scheduleWeek || week));
+  tasks.push(loadTerms());
+  if (needNextWeek) tasks.push(loadNextWeekSchedule());
+
+  Promise.allSettled(tasks).then(() => {
+    if (state.tab === "today") renderToday();
+    scheduleDiaryPreload();
+  });
+}
+
+let _preloadTimer = null;
+
+/**
+ * Предзагрузка соседних недель дневника.
+ *
+ * Делаем это последним делом и с задержкой: основные экраны должны
+ * открыться быстро, а соседние недели — уже готовы к моменту,
+ * когда пользователь нажмёт «Пред. неделя».
+ */
+function scheduleDiaryPreload(delay = 1500) {
+  if (_preloadTimer) clearTimeout(_preloadTimer);
+  _preloadTimer = setTimeout(() => {
+    _preloadTimer = null;
+    api.preloadDiary(2).catch(() => {});
+  }, delay);
 }
 
 function refreshAll() {
@@ -385,6 +1085,7 @@ function refreshAll() {
     .finally(() => {
       btn.classList.remove("is-busy");
       toast("Данные обновлены");
+      scheduleDiaryPreload(2500);
     });
 }
 
@@ -438,27 +1139,42 @@ async function copyHomework() {
 // --- Вкладки и Термины ---
 const TERM_SELECTORS = ["#term-select", "#term-select-att", "#term-select-results"];
 
+/** Заполняет селекты периодов — и при загрузке из кэша, и после ответа сети. */
+function applyTerms(terms) {
+  if (!Array.isArray(terms) || !terms.length) return;
+
+  const saved = lsGet("sgo.term") || "";
+  for (const sel of TERM_SELECTORS) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    el.innerHTML = "";
+    for (const t of terms) {
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.name;
+      if (t.id === saved) opt.selected = true;
+      el.appendChild(opt);
+    }
+    if (!el.value && terms.length) {
+      el.value = terms[terms.length - 1].id;
+    }
+  }
+}
+
 async function loadTerms() {
+  let terms = [];
   try {
     const data = await api.fetchJson("/api/terms");
-    const terms = data.terms || [];
-    const saved = lsGet("sgo.term") || "";
-    for (const sel of TERM_SELECTORS) {
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      el.innerHTML = "";
-      for (const t of terms) {
-        const opt = document.createElement("option");
-        opt.value = t.id;
-        opt.textContent = t.name;
-        if (t.id === saved) opt.selected = true;
-        el.appendChild(opt);
-      }
-      if (!el.value && terms.length) {
-        el.value = terms[terms.length - 1].id;
-      }
-    }
-  } catch (e) { /* ignore */ }
+    terms = data.terms || [];
+    if (terms.length) saveCache("terms", { terms });
+  } catch (e) {
+    // Офлайн: восстанавливаем список периодов из кэша, чтобы селекты
+    // не оставались на «Загрузка…» и оценки брались по нужному ключу.
+    const cached = await loadCache("terms");
+    if (cached && Array.isArray(cached.terms)) terms = cached.terms;
+  }
+
+  applyTerms(terms);
 }
 
 function syncTermSelectors(source) {
@@ -508,25 +1224,57 @@ function loadResults(force) {
   }
 
   if (state.resultsPromise && !force) return state.resultsPromise;
-  if (!state.results) {
-    list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
-  }
-  const { term, mode } = resultsParams();
 
-  state.resultsPromise = api.getResults(term, mode)
-    .then((data) => {
+  const { term, mode } = resultsParams();
+  const cacheKey = resultsCacheKey(term, mode);
+  const requestId = ++resultsRequestId;
+
+  const promise = (async () => {
+    let cached = null;
+    if (!state.results) {
+      cached = await loadCache(cacheKey);
+      if (requestId !== resultsRequestId) return null;
+      // Без загруженного списка периодов точный ключ может быть неизвестен.
+      // В этом случае берём последний снимок для выбранного режима.
+      if (!cached && !term) {
+        const latest = await loadCache(`results.latest.${mode}`);
+        if (requestId !== resultsRequestId) return null;
+        if (latest && latest.data) cached = latest.data;
+      }
+      if (cached) {
+        state.results = cached;
+        renderResults(cached);
+      } else {
+        list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+      }
+    }
+
+    try {
+      const data = await api.getResults(term, mode);
+      await saveCache(cacheKey, data);
+      await saveCache(`results.latest.${mode}`, { termId: term, data });
+      if (requestId !== resultsRequestId) return null;
       state.results = data;
       renderResults(data);
+      clearOfflineBanner();
       return data;
-    })
-    .catch((err) => {
-      if (!state.results) {
-        list.innerHTML = `<div class="empty"><strong>Итоги недоступны</strong>${escapeHtml(err.message)}</div>`;
+    } catch (err) {
+      if (requestId !== resultsRequestId) return null;
+      if (state.results || cached) {
+        showOfflineBanner(state.quick || state.results || cached);
+        return state.results || cached;
       }
+      list.innerHTML = `<div class="empty"><strong>Итоги недоступны</strong>${escapeHtml(err.message)}</div>`;
       return null;
-    })
-    .finally(() => { state.resultsPromise = null; });
-  return state.resultsPromise;
+    }
+  })();
+
+  state.resultsPromise = promise;
+  const reset = () => {
+    if (state.resultsPromise === promise) state.resultsPromise = null;
+  };
+  promise.then(reset, reset);
+  return promise;
 }
 
 function bindResultsControls() {
@@ -599,13 +1347,23 @@ function selectTab(name) {
 
 // --- Инициализация ---
 async function checkAuth() {
+  const controller = new AbortController();
+  // Если сервер завис (не отвечает и не рвёт соединение), не держим
+  // пользователя на экране загрузки дольше трёх секунд.
+  const timer = setTimeout(() => controller.abort(), 3000);
   try {
-    const res = await fetch('/api/check_auth').then(r => r.json());
+    const res = await fetch('/api/check_auth', { signal: controller.signal }).then(r => r.json());
     if (res.authenticated) {
       return true;
     }
   } catch (e) {
     console.error("Auth check failed", e);
+    // Офлайн-режим: если сервер недоступен, но есть сохранённые данные,
+    // пускаем в приложение только на чтение вместо экрана входа.
+    const cached = await loadCache("quick");
+    if (cached && cached.student) return true;
+  } finally {
+    clearTimeout(timer);
   }
   return false;
 }
@@ -675,13 +1433,12 @@ function showLogin() {
 
       if (res.ok) {
         overlay.hidden = true;
-        state.authenticated = true;
-        loadQuick();
-        loadTerms().then(() => {
-          loadGrades(true);
-          loadResults(true);
-          selectTab(state.tab);
-        });
+        // Кэш мог остаться от предыдущей сессии — после входа грузим заново.
+        await clearCache();
+        await clearCalcState();
+        hydratePromise = null;
+        appRevealed = false;
+        startApp({ useCache: false });
       } else {
         let msg = res.error || "Ошибка входа";
         if (res.login) {
@@ -715,6 +1472,9 @@ function init() {
   initSettings();
   document.querySelector("#theme-toggle").addEventListener("click", toggleTheme);
 
+  const markReadButton = document.querySelector("#mark-read");
+  if (markReadButton) markReadButton.addEventListener("click", markEverythingRead);
+
   document.querySelector("#tabs").addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
     if (tab && tab.style.display !== "none") selectTab(tab.dataset.tab);
@@ -726,6 +1486,13 @@ function init() {
   document.querySelector("#copy").addEventListener("click", copyHomework);
   bindTermSelectors();
   bindResultsControls();
+
+  // «Отметить всё прочитанным» очищает бейджи и подсветку во всех разделах.
+  window.addEventListener("sgo:changes-read", () => {
+    if (state.grades) renderGradesData(state.grades);
+    if (state.diary) renderDiary(state.diary);
+    if (state.schedule) renderScheduleData(state.schedule);
+  });
 
   window.addEventListener("sgo:navigate", (event) => {
     const tab = event.detail && event.detail.tab;
@@ -745,6 +1512,26 @@ function init() {
     loadDiary(d.toISOString().slice(0, 10));
   });
 
+  // Переход к дате: открываем нужную неделю и подсвечиваем этот день.
+  const diaryDate = document.querySelector("#diary-date");
+  if (diaryDate) {
+    diaryDate.addEventListener("change", () => {
+      const value = diaryDate.value;
+      if (!value) return;
+      const week = weekStartIso(value);
+      if (!week) return;
+
+      const current = state.currentWeek ? weekStartIso(state.currentWeek) : "";
+      if (current === week) {
+        if (!highlightDiaryDate(value)) toast("На эту дату уроков нет");
+        return;
+      }
+      loadDiary(week).then(() => {
+        if (!highlightDiaryDate(value)) toast("На эту дату уроков нет");
+      });
+    });
+  }
+
   document.querySelectorAll(".btn-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".btn-toggle").forEach(b => b.classList.remove("is-active"));
@@ -759,17 +1546,19 @@ function init() {
 
   window.addEventListener("sgo:unauthorized", showLogin);
 
-  checkAuth().then(isAuth => {
-    if (isAuth) {
-      state.authenticated = true;
-      loadQuick();
-      loadTerms().then(() => {
-        loadGrades(true);
-        loadResults(true);
-        selectTab(state.tab);
-      });
-    } else {
+  // Сначала проверяем авторизацию (быстрый локальный запрос), затем сразу
+  // показываем кэш — без экрана загрузки и без мигания чужими данными.
+  checkAuth().then(async (isAuth) => {
+    if (!isAuth) {
+      state.authenticated = false;
       showLogin();
+      return;
+    }
+    state.authenticated = true;
+    if (await hydrateOnce()) {
+      revealCachedApp();
+    } else {
+      startApp({ useCache: false });
     }
   });
 
