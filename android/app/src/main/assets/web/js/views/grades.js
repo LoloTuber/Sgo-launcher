@@ -1,5 +1,7 @@
 import { escapeHtml, shortDate, markCls, formatAverage } from '../utils.js';
 import { isNewMark, newMarksCount } from '../changes.js';
+import { loadDetails, renderAssignmentDetails } from './details.js';
+import { userError } from '../errors.js';
 
 export function renderGrades(data) {
   const label = document.querySelector("#grades-sub");
@@ -75,12 +77,23 @@ export function renderGrades(data) {
       const marksHtml = subj.marks.map((m) => {
         const w = m.weight > 1 ? `<span class="weight-badge">x${m.weight}</span>` : "";
         const isNew = isNewMark(subj.name, m);
+        // Оценка кликабельна, если СГО дал идентификатор задания:
+        // по нему открываются подробности (тема, вес, учитель, класс).
+        const hasId = m.id !== undefined && m.id !== null && m.id !== 0 && m.id !== "";
+        const title = [m.topic, m.type].filter(Boolean).join(" · ") || "Оценка";
+        const attrs = hasId
+          ? `data-mark-id="${escapeHtml(m.id)}" data-mark-value="${escapeHtml(m.value)}" data-mark-date="${escapeHtml(shortDate(m.date))}" role="button" tabindex="0" aria-expanded="false"`
+          : "";
         return `
-          <span class="mark-chip ${markCls(m.value)} ${isNew ? "is-new" : ""}" ${isNew ? 'title="Новая оценка"' : ""}>
-            ${escapeHtml(m.value)}
-            <small>${escapeHtml(shortDate(m.date))}</small>
-            ${w}
-            ${isNew ? `<span class="new-dot"></span>` : ""}
+          <span class="mark-chip-wrap">
+            <span class="mark-chip ${markCls(m.value)} ${isNew ? "is-new" : ""} ${hasId ? "is-clickable" : ""}"
+                  ${attrs} title="${escapeHtml(title)}">
+              ${escapeHtml(m.value)}
+              <small>${escapeHtml(shortDate(m.date))}</small>
+              ${w}
+              ${isNew ? `<span class="new-dot"></span>` : ""}
+              ${hasId ? `<span class="hw-chevron" aria-hidden="true">›</span>` : ""}
+            </span>
           </span>
         `;
       }).join("");
@@ -93,8 +106,69 @@ export function renderGrades(data) {
           ${avg}
         </div>
         <div class="marks">${marksHtml}</div>
+        <div class="subject-details"></div>
       </article>`;
     }).join("");
+
+  bindMarkDetails(list);
+}
+
+/**
+ * Клик по оценке в «Успеваемости» раскрывает подробности прямо на странице:
+ * тема, предмет, дата, вес, учитель, средний балл класса, оценки класса,
+ * комментарий и файлы.
+ */
+function bindMarkDetails(list) {
+  list.querySelectorAll(".mark-chip[data-mark-id]").forEach((chip) => {
+    chip.addEventListener("click", () => toggleMarkDetails(chip));
+    chip.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleMarkDetails(chip);
+      }
+    });
+  });
+}
+
+async function toggleMarkDetails(chip) {
+  const id = chip.dataset.markId;
+  if (!id) return;
+
+  const article = chip.closest(".subject");
+  const box = article && article.querySelector(".subject-details");
+  if (!box) return;
+
+  const existing = box.querySelector(`.subject-details-item[data-details-id="${CSS.escape(String(id))}"]`);
+  if (existing) {
+    existing.remove();
+    chip.setAttribute("aria-expanded", "false");
+    return;
+  }
+
+  const item = document.createElement("div");
+  item.className = "subject-details-item";
+  item.dataset.detailsId = String(id);
+  item.innerHTML = `
+    <div class="subject-details-head">
+      <span>Оценка ${escapeHtml(chip.dataset.markValue || "")} · ${escapeHtml(chip.dataset.markDate || "")}</span>
+      <button class="subject-details-close" type="button" aria-label="Свернуть">×</button>
+    </div>
+    <div class="subject-details-body"><p class="meta">Загружаю подробности…</p></div>
+  `;
+  item.querySelector(".subject-details-close").addEventListener("click", () => {
+    item.remove();
+    chip.setAttribute("aria-expanded", "false");
+  });
+  box.appendChild(item);
+  chip.setAttribute("aria-expanded", "true");
+
+  const body = item.querySelector(".subject-details-body");
+  try {
+    const data = await loadDetails(id);
+    body.innerHTML = renderAssignmentDetails(data, chip.dataset.markValue);
+  } catch (error) {
+    body.innerHTML = `<p class="hw-error">Не удалось загрузить: ${escapeHtml(userError(error.message))}</p>`;
+  }
 }
 
 export function renderResults(results) {

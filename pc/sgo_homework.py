@@ -292,7 +292,7 @@ class SgoClient:
         raise SgoError(f"Школа «{school}» не найдена. Возможные варианты:\n" + ("\n".join(lines) if lines else "  (ничего не найдено)") + "\nУточните название или укажите id через --school-id.")
 
     def detect_school(self, login: str) -> int:
-        raise SgoError("Нужно указать школу.\nУточните название в sgo_config.json.")
+        raise SgoError("Укажите школу — введите её название или ID (в консоли: --school-id).")
 
     def diary(self, monday: date) -> Dict[str, Any]:
         return self.diary_range(monday, monday + timedelta(days=6))

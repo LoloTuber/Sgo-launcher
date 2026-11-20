@@ -81,8 +81,9 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
             }
 
             if (uri == "/api/check_auth") {
+                val school = prefs.getString("school", "") ?: ""
                 return newFixedLengthResponse(Response.Status.OK, "application/json",
-                    "{\"ok\":true, \"authenticated\":${checkAuth()}}")
+                    "{\"ok\":true, \"authenticated\":${checkAuth()}, \"school\":\"$school\"}")
             }
 
             if (uri == "/api/logout" && method == Method.POST) {
@@ -142,6 +143,22 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
             val weekStart = query["week"]?.firstOrNull()
             val termId = query["term"]?.firstOrNull()
             val mode = query["mode"]?.firstOrNull() ?: "current"
+            // refresh=1 — читать неделю заново, а не отдавать предзагруженную копию.
+            val refreshRaw = query["refresh"]?.firstOrNull()?.lowercase()
+            val forceDiary = refreshRaw == "1" || refreshRaw == "true" || refreshRaw == "yes"
+
+            // Сведения о сборке — для служебного режима в настройках.
+            if (uri == "/api/about") {
+                val about = JSONObject().apply {
+                    put("ok", true)
+                    put("version", APP_VERSION)
+                    put("build", APP_BUILD)
+                    put("platform", "android")
+                    put("dataDir", context.applicationInfo.dataDir)
+                    put("school", prefs.getString("school", "") ?: "")
+                }
+                return newFixedLengthResponse(Response.Status.OK, "application/json", about.toString())
+            }
 
             val payload: String? = try {
                 retryOnAuth {
@@ -154,11 +171,23 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                             client.preloadDiary(weeks.coerceIn(1, 4))
                             JSONObject().put("ok", true).put("started", true).toString()
                         }
-                        uri.startsWith("/api/diary") -> client.getDiaryJson(weekStart)
+                        uri.startsWith("/api/diary") -> client.getDiaryJson(weekStart, forceDiary)
                         uri.startsWith("/api/schedule") -> client.getScheduleJson(weekStart)
                         uri.startsWith("/api/results") -> client.getResultsJson(termId, mode)
                         uri.startsWith("/api/grades") -> client.getGradesJson(termId)
                         uri.startsWith("/api/terms") -> client.getTermsJson()
+                        uri.startsWith("/api/assignment/preload") -> {
+                            // Заранее грузим подробности заданий — отвечаем сразу.
+                            val ids = query["ids"]?.firstOrNull()
+                                ?.split(",")
+                                ?.mapNotNull { it.trim().toIntOrNull() }
+                                ?: emptyList()
+                            client.preloadAssignments(ids)
+                            JSONObject().put("ok", true)
+                                .put("started", ids.isNotEmpty())
+                                .put("count", ids.size)
+                                .toString()
+                        }
                         uri.startsWith("/api/assignment/") -> {
                             val id = uri.substringAfterLast("/").toIntOrNull() ?: 0
                             client.getAssignmentJson(id)

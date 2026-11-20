@@ -1,8 +1,9 @@
 import { state } from './js/state.js';
 import * as api from './js/api.js';
 import { escapeHtml, prettyDateTime, toast, localIsoDate, weekStartIso, addDaysIso } from './js/utils.js';
-import { applyUiSettings, bindSettingsControls, getSettings, syncNativeSettings, applySettingsToControls } from './js/settings.js';
+import { applyUiSettings, bindSettingsControls, getSettings, syncNativeSettings, applySettingsToControls, isDeveloperMode } from './js/settings.js';
 import { refreshChanges, clearChanges, markAllRead } from './js/changes.js';
+import { userError } from './js/errors.js';
 import { storageGet, storageSet } from './js/storage.js';
 import { scheduleFromDiary, homeworkFromDiary } from './js/derive.js';
 
@@ -11,6 +12,7 @@ import { renderHomework } from './js/views/homework.js';
 import { renderDiary, highlightDiaryDate } from './js/views/diary.js';
 import { renderScheduleData, updateScheduleStatus } from './js/views/schedule.js';
 import { renderGrades, renderResults, renderAttendance } from './js/views/grades.js';
+import { renderNew, initNewTab } from './js/views/new.js';
 import { renderCalculator, restoreCalcState, clearCalcState } from './js/views/calculator.js';
 import { renderAnalytics } from './js/views/analytics.js';
 import { renderToday, updateTodayLive } from './js/views/today.js';
@@ -280,6 +282,37 @@ function markEverythingRead() {
   toast("Отмечено прочитанным");
 }
 
+// --- Служебные сведения о сборке ---
+let aboutInfo = null;
+
+/** Текст со сведениями о сборке — для служебного режима. */
+function aboutText() {
+  if (!aboutInfo) return "";
+  const parts = [
+    `Дневник ${aboutInfo.version || "?"} (сборка ${aboutInfo.build || "?"})`,
+    `Платформа: ${aboutInfo.platform || "?"}`,
+  ];
+  if (aboutInfo.python) parts.push(`Python ${aboutInfo.python}`);
+  if (aboutInfo.dataDir) parts.push(`Данные: ${aboutInfo.dataDir}`);
+  if (aboutInfo.school) parts.push(`Школа: ${aboutInfo.school}`);
+  return parts.join("\n");
+}
+
+/** Подгружает сведения о сборке и показывает их в подвале и настройках. */
+async function loadAboutInfo() {
+  if (!isDeveloperMode()) return;
+  const info = document.querySelector("#about-info");
+  const version = document.querySelector("#app-version");
+  try {
+    const data = await api.getAbout();
+    aboutInfo = data;
+    if (info) info.textContent = aboutText();
+    if (version) version.textContent = `Версия ${data.version || "?"}`;
+  } catch (e) {
+    if (info) info.textContent = "Сведения о сборке недоступны.";
+  }
+}
+
 // --- Тема ---
 const COLOR_THEMES = ["blue", "pink", "purple", "orange", "red", "teal", "cyan", "slate"];
 
@@ -506,6 +539,8 @@ function initSettings() {
     } else if (name === "autostart") {
       // Автозапуск включает/выключает нативная часть — сообщаем ей.
       notifyAutostart(!!getSettings().autostart);
+    } else if (name === "developerMode") {
+      loadAboutInfo();
     }
     if (state.tab === "today") renderToday();
   });
@@ -551,6 +586,22 @@ function initSettings() {
       toast("Отметки «новое» сброшены");
     });
   }
+
+  // Служебные сведения о сборке — только в служебном режиме.
+  const copyAboutBtn = document.querySelector("#copy-about-btn");
+  if (copyAboutBtn) {
+    copyAboutBtn.addEventListener("click", async () => {
+      const text = aboutText();
+      if (!text) { toast("Сведения недоступны"); return; }
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("Сведения скопированы");
+      } catch (e) {
+        toast("Не удалось скопировать");
+      }
+    });
+  }
+  if (isDeveloperMode()) loadAboutInfo();
 
   // Если сохранённая активная вкладка скрыта — открываем первую видимую.
   ensureVisibleTab();
@@ -686,10 +737,10 @@ function loadQuick(force) {
         showOfflineBanner(state.diary);
         return null;
       }
-      showErrorBanner(err.message);
+      showErrorBanner(userError(err.message));
       const hwList = document.querySelector("#hw-list");
       if (hwList) {
-        hwList.innerHTML = `<div class="empty"><strong>Не удалось загрузить</strong>${escapeHtml(err.message)}</div>`;
+        hwList.innerHTML = `<div class="empty"><strong>Не удалось загрузить</strong>${escapeHtml(userError(err.message))}</div>`;
       }
       throw err;
     }
@@ -744,9 +795,9 @@ function loadGrades(force) {
         showOfflineBanner(state.quick || state.grades || cached);
         return state.grades || cached;
       }
-      showErrorBanner(`${err.message}\nОценки могут быть неполными.`);
+      showErrorBanner(userError(`${err.message}\nОценки могут быть неполными.`));
       if (list) {
-        list.innerHTML = `<div class="empty"><strong>Оценки недоступны</strong>${escapeHtml(err.message)}</div>`;
+        list.innerHTML = `<div class="empty"><strong>Оценки недоступны</strong>${escapeHtml(userError(err.message))}</div>`;
       }
       return null;
     }
@@ -760,7 +811,13 @@ function loadGrades(force) {
   return promise;
 }
 
-function loadDiary(weekIso) {
+/**
+ * Загружает дневник за неделю.
+ *
+ * options.force = true — читать неделю заново, а не брать предзагруженную
+ * копию (так работает переход на следующую неделю).
+ */
+function loadDiary(weekIso, options = {}) {
   const cacheWeek = weekStartIso(weekIso || localIsoDate()) || weekIso || "current";
   const cacheKey = diaryCacheKey(cacheWeek);
   const list = document.querySelector("#diary-list");
@@ -783,7 +840,7 @@ function loadDiary(weekIso) {
     }
 
     try {
-      const data = await api.getDiary(weekIso);
+      const data = await api.getDiary(weekIso, !!options.force);
       await saveCache(diaryCacheKey(data.weekStart || cacheWeek), data);
       if (requestId !== diaryRequestId) return null;
       state.diary = data;
@@ -802,7 +859,7 @@ function loadDiary(weekIso) {
         return state.diary || cached;
       }
       if (list) {
-        list.innerHTML = `<div class="empty"><strong>Ошибка дневника</strong>${escapeHtml(err.message)}</div>`;
+        list.innerHTML = `<div class="empty"><strong>Ошибка дневника</strong>${escapeHtml(userError(err.message))}</div>`;
       }
       return null;
     }
@@ -862,7 +919,7 @@ function loadSchedule(weekIso) {
         return state.schedule;
       }
       if (list) {
-        list.innerHTML = `<div class="empty"><strong>Ошибка расписания</strong>${escapeHtml(err.message)}</div>`;
+        list.innerHTML = `<div class="empty"><strong>Ошибка расписания</strong>${escapeHtml(userError(err.message))}</div>`;
       }
       return null;
     }
@@ -1264,7 +1321,7 @@ function loadResults(force) {
         showOfflineBanner(state.quick || state.results || cached);
         return state.results || cached;
       }
-      list.innerHTML = `<div class="empty"><strong>Итоги недоступны</strong>${escapeHtml(err.message)}</div>`;
+      list.innerHTML = `<div class="empty"><strong>Итоги недоступны</strong>${escapeHtml(userError(err.message))}</div>`;
       return null;
     }
   })();
@@ -1336,6 +1393,7 @@ function selectTab(name) {
   if (!state.authenticated) return;
 
   if (name === "today") ensureTodayData();
+  if (name === "new") renderNew();
   if (name === "grades" || name === "attendance" || name === "calc" || name === "analytics") loadGrades();
   if (name === "results") loadResults();
   if (name === "diary" && !state.diary) loadDiary();
@@ -1355,6 +1413,11 @@ async function checkAuth() {
     const res = await fetch('/api/check_auth', { signal: controller.signal }).then(r => r.json());
     if (res.authenticated) {
       return true;
+    }
+    // Подставляем сохранённую школу — чтобы не искать её заново.
+    if (res.school) {
+      const schoolInput = document.querySelector("#login-school");
+      if (schoolInput) schoolInput.value = res.school;
     }
   } catch (e) {
     console.error("Auth check failed", e);
@@ -1389,6 +1452,14 @@ function showLogin() {
 
   const userInput = document.querySelector("#login-user");
   const pasteBtn = document.querySelector("#login-paste");
+
+  // Школу запоминаем: после выхода из аккаунта сервер её не знает.
+  // Если школа сохранена — она главнее значения по умолчанию.
+  const schoolInput = document.querySelector("#login-school");
+  if (schoolInput) {
+    const saved = lsGet("sgo.school");
+    if (saved) schoolInput.value = saved;
+  }
 
   pasteBtn.onclick = async () => {
     let text = "";
@@ -1433,6 +1504,8 @@ function showLogin() {
 
       if (res.ok) {
         overlay.hidden = true;
+        // Школу запоминаем — подставим при следующем входе.
+        if (school) lsSet("sgo.school", school);
         // Кэш мог остаться от предыдущей сессии — после входа грузим заново.
         await clearCache();
         await clearCalcState();
@@ -1440,9 +1513,11 @@ function showLogin() {
         appRevealed = false;
         startApp({ useCache: false });
       } else {
-        let msg = res.error || "Ошибка входа";
-        if (res.login) {
-          msg += `\nЛогин: «${res.login}», символов в пароле: ${res.passLen}.\nПроверьте раскладку RU/EN и лишние пробелы.`;
+        let msg = userError(res.error || "Ошибка входа");
+        msg += "\nПроверьте раскладку RU/EN и лишние пробелы.";
+        // Детали входа (логин, длина пароля) — только в служебном режиме.
+        if (isDeveloperMode() && res.login) {
+          msg += `\nЛогин: «${res.login}», символов в пароле: ${res.passLen}.`;
         }
         err.textContent = msg;
         err.style.whiteSpace = "pre-line";
@@ -1474,6 +1549,12 @@ function init() {
 
   const markReadButton = document.querySelector("#mark-read");
   if (markReadButton) markReadButton.addEventListener("click", markEverythingRead);
+
+  // Кнопка «Отметить прочитанным» прямо на вкладке «Новое».
+  const newReadButton = document.querySelector("#new-read-all");
+  if (newReadButton) newReadButton.addEventListener("click", markEverythingRead);
+
+  initNewTab();
 
   document.querySelector("#tabs").addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
@@ -1509,7 +1590,8 @@ function init() {
     if (!state.currentWeek) return;
     const d = new Date(state.currentWeek);
     d.setDate(d.getDate() + 7);
-    loadDiary(d.toISOString().slice(0, 10));
+    // Следующую неделю читаем по-настоящему, а не отдаём предзагрузку.
+    loadDiary(d.toISOString().slice(0, 10), { force: true });
   });
 
   // Переход к дате: открываем нужную неделю и подсвечиваем этот день.

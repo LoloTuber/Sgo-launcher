@@ -78,6 +78,14 @@ class SgoClient {
     // поэтому повторный заход на вкладку не должен снова тянуть сеть.
     internal val jsonCache = mutableMapOf<String, Pair<Long, String>>()
 
+    // Кэш подробностей заданий: по клику на оценку подробности открываются
+    // сразу, без повторного запроса в СГО.
+    internal val detailsCache = mutableMapOf<Int, Pair<Long, String>>()
+
+    // Время последнего принудительного перечитывания недели дневника:
+    // нужно, чтобы «След. неделя» не превращалась в частые запросы.
+    internal val diaryForcedAt = mutableMapOf<String, Long>()
+
     fun isLoggedIn() = token != null
 
     fun reset() {
@@ -86,6 +94,8 @@ class SgoClient {
         synchronized(weightsCache) { weightsCache.clear() }
         synchronized(diaryCache) { diaryCache.clear() }
         synchronized(jsonCache) { jsonCache.clear() }
+        synchronized(detailsCache) { detailsCache.clear() }
+        synchronized(diaryForcedAt) { diaryForcedAt.clear() }
     }
 
     fun isTokenExpired(): Boolean {

@@ -5,6 +5,7 @@ import argparse
 import json
 import mimetypes
 import os
+import platform
 import re
 import socket
 import sys
@@ -37,6 +38,10 @@ def resource_path(relative_path):
 
 WEB_ROOT = Path(resource_path("web"))
 
+# Версия приложения: показывается в служебном режиме.
+APP_VERSION = "1.3"
+APP_BUILD = "2026-11-19"
+
 _WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 _MONTHS_GENITIVE = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
 
@@ -48,6 +53,16 @@ _diary_cache_time: Dict[str, float] = {}
 _diary_cache_lock = threading.Lock()
 _preload_lock = threading.Lock()
 _preload_running = False
+
+# Кэш подробностей заданий: по клику на оценку подробности открываются
+# сразу, без повторного запроса в СГО.
+DETAILS_CACHE_TTL = 1800  # 30 минут
+_details_cache: Dict[int, tuple] = {}
+_details_cache_lock = threading.Lock()
+# Пауза между принудительными перечитываниями одной недели: чтобы
+# «След. неделя» не превращалась в частые запросы к СГО.
+FORCE_DIARY_COOLDOWN = 60  # секунд
+_diary_forced_at: Dict[str, float] = {}
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -389,7 +404,7 @@ def homework_data(state: AppState, target: Optional[date] = None) -> Dict[str, A
         "note": note, "lessons": payload, "tasksCount": sum(len(i["tasks"]) for i in payload),
     }
 
-def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, Any]:
+def diary_data(state: AppState, week_start: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
     if week_start:
         try: d = date.fromisoformat(week_start)
         except ValueError: d = date.today()
@@ -398,11 +413,19 @@ def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, A
     key = monday.isoformat()
 
     # Свежая копия из кэша — мгновенный ответ без запроса в СГО.
+    # force=True — читаем неделю заново (переход по «След. неделя»),
+    # но не чаще раза в минуту, чтобы не долбить сервер.
+    now = time.time()
     with _diary_cache_lock:
         stamp = _diary_cache_time.get(key, 0)
         cached = _diary_cache.get(key)
-        if cached is not None and (time.time() - stamp) < DIARY_CACHE_TTL:
+        last_forced = _diary_forced_at.get(key, 0)
+        if force and (now - last_forced) < FORCE_DIARY_COOLDOWN:
+            force = False
+        if cached is not None and not force and (now - stamp) < DIARY_CACHE_TTL:
             return cached
+        if force:
+            _diary_forced_at[key] = now
 
     with state.lock:
         state.connect()
@@ -443,10 +466,12 @@ def diary_data(state: AppState, week_start: Optional[str] = None) -> Dict[str, A
 
 
 def clear_diary_cache() -> None:
-    """Сбрасывает кэш дневника — например, после ручного обновления."""
+    """Сбрасывает кэш дневника и подробностей — например, после ручного обновления."""
     with _diary_cache_lock:
         _diary_cache.clear()
         _diary_cache_time.clear()
+        _diary_forced_at.clear()
+    clear_details_cache()
 
 
 def preload_diary(state: AppState, weeks: int = 2) -> int:
@@ -877,6 +902,12 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
             }
 
 def assignment_details(state: AppState, assignment_id: int) -> Dict[str, Any]:
+    # Кэш подробностей: клик по оценке не должен каждый раз ходить в СГО.
+    with _details_cache_lock:
+        entry = _details_cache.get(assignment_id)
+        if entry and (time.time() - entry[0]) < DETAILS_CACHE_TTL:
+            return entry[1]
+
     with state.lock:
         state.connect()
         info = state.client.assignment_info(assignment_id)
@@ -947,7 +978,7 @@ def assignment_details(state: AppState, assignment_id: int) -> Dict[str, Any]:
         except (TypeError, ValueError):
             continue
 
-    return {
+    payload = {
         "id": assignment_id,
         "subject": subject,
         "topic": _clean(info.get("assignmentName")),
@@ -959,6 +990,61 @@ def assignment_details(state: AppState, assignment_id: int) -> Dict[str, Any]:
         "teachers": teachers,
         "files": files,
     }
+
+    with _details_cache_lock:
+        _details_cache[assignment_id] = (time.time(), payload)
+    return payload
+
+
+def clear_details_cache() -> None:
+    """Сбрасывает кэш подробностей заданий."""
+    with _details_cache_lock:
+        _details_cache.clear()
+
+
+def about_data(state: AppState) -> Dict[str, Any]:
+    """Сведения о сборке и путях — для служебного режима в настройках."""
+    try:
+        data_dir = str(core.config_dir())
+    except Exception:
+        data_dir = ""
+    return {
+        "version": APP_VERSION,
+        "build": APP_BUILD,
+        "platform": sys.platform,
+        "python": platform.python_version(),
+        "dataDir": data_dir,
+        # ID школы — не пароль: он и так виден в настройках СГО.
+        "school": str(state.config.get("school_id") or state.config.get("school") or ""),
+    }
+
+
+def preload_assignments(state: AppState, ids: List[int]) -> int:
+    """Заранее загружает подробности заданий в фоне.
+
+    Ответ клиенту уходит сразу, а сами подробности кладутся в кэш:
+    к моменту клика по оценке они уже готовы.
+    """
+    wanted = []
+    for raw in ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in wanted:
+            wanted.append(value)
+    if not wanted:
+        return 0
+
+    def worker() -> None:
+        for assignment_id in wanted:
+            try:
+                assignment_details(state, assignment_id)
+            except Exception as exc:
+                print(f"! предзагрузка подробностей ({assignment_id}) не удалась: {exc}", file=sys.stderr)
+
+    threading.Thread(target=worker, name="sgo-details-preload", daemon=True).start()
+    return len(wanted)
 
 class SgoHttpServer(ThreadingHTTPServer):
     """HTTP-сервер с защитой от «двойного» захвата порта в Windows.
@@ -1010,7 +1096,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                             self.state.connect()
                         except Exception as exc:
                             self.log_message("auto-login failed: %s", exc)
-                self._send_json({"ok": True, "authenticated": self.state.client is not None})
+                self._send_json({"ok": True, "authenticated": self.state.client is not None,
+                                 "school": str(self.state.config.get("school_id") or "")})
             elif path == "/api/quick": self._handle_quick(query)
             elif path == "/api/grades":
                 term_id = (query.get("term") or [None])[0]
@@ -1026,7 +1113,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "updated": datetime.now().isoformat(timespec="seconds"), **data})
             elif path == "/api/diary":
                 week = (query.get("week") or [None])[0]
-                self._send_json({"ok": True, **diary_data(self.state, week)})
+                raw_refresh = (query.get("refresh") or ["0"])[0]
+                force = str(raw_refresh).strip().lower() in ("1", "true", "yes")
+                self._send_json({"ok": True, **diary_data(self.state, week, force=force)})
             elif path == "/api/diary/preload":
                 # Фоновая предзагрузка соседних недель — отдаём сразу.
                 raw = (query.get("weeks") or ["2"])[0]
@@ -1040,8 +1129,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, **schedule_data(self.state, week)})
             elif path == "/api/terms":
                 self._send_json({"ok": True, "terms": terms_data(self.state)})
+            elif path == "/api/about":
+                self._send_json({"ok": True, **about_data(self.state)})
             elif path == "/api/ping":
                 self._send_json({"ok": True, "time": datetime.now().isoformat(timespec="seconds")})
+            elif path == "/api/assignment/preload":
+                # Заранее грузим подробности заданий — отвечаем сразу.
+                raw_ids = (query.get("ids") or [""])[0]
+                ids = [part for part in str(raw_ids).split(",") if part.strip()]
+                count = preload_assignments(self.state, ids)
+                self._send_json({"ok": True, "started": count > 0, "count": count})
             elif path.startswith("/api/assignment/"):
                 raw_id = path.rsplit("/", 1)[-1]
                 try: aid = int(raw_id)
@@ -1176,7 +1273,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._handle_refresh()
             return
         if path == "/api/check_auth":
-            self._send_json({"ok": True, "authenticated": self.state.client is not None})
+            self._send_json({"ok": True, "authenticated": self.state.client is not None,
+                             "school": str(self.state.config.get("school_id") or "")})
             return
 
         self._read_body_silent()

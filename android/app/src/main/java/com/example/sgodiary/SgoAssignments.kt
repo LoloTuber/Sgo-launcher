@@ -1,9 +1,47 @@
 package com.example.sgodiary
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Подробности задания (оценки или домашнего задания).
+ *
+ * Ответ кэшируется на 30 минут: клик по оценке не должен каждый раз
+ * ходить в СГО. Заранее загруженные подробности лежат в том же кэше.
+ */
 internal fun SgoClient.getAssignmentJson(id: Int): String {
+    synchronized(detailsCache) {
+        val cached = detailsCache[id]
+        if (cached != null && System.currentTimeMillis() - cached.first < DETAILS_CACHE_TTL) {
+            return cached.second
+        }
+    }
+
+    val json = fetchAssignmentJson(id)
+    synchronized(detailsCache) { detailsCache[id] = Pair(System.currentTimeMillis(), json) }
+    return json
+}
+
+/**
+ * Заранее загружает подробности заданий в фоне.
+ * Ответ клиенту не ждёт — к моменту клика подробности уже в кэше.
+ */
+internal fun SgoClient.preloadAssignments(ids: List<Int>) {
+    val wanted = ids.filter { it > 0 }.distinct()
+    if (wanted.isEmpty()) return
+    Thread({
+        for (id in wanted) {
+            try {
+                getAssignmentJson(id)
+            } catch (e: Exception) {
+                Log.w("SGO_DETAILS", "Не удалось загрузить подробности $id: ${e.message}")
+            }
+        }
+    }, "sgo-details-preload").start()
+}
+
+private fun SgoClient.fetchAssignmentJson(id: Int): String {
     val info = get("student/diary/assigns/$id", mapOf("studentId" to studentId!!))
     val res = JSONObject().apply { put("ok", true); put("id", id) }
 

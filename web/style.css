@@ -1592,3 +1592,95 @@ body.dark-theme .today-next-day .today-lesson { background: var(--green-50); bor
 @media (max-width: 560px) {
   .today-read-all { margin-left: 0; width: 100%; }
 }
+
+
+/* =========================================
+   ПОДРОБНОСТИ ОЦЕНКИ НА СТРАНИЦЕ «УСПЕВАЕМОСТЬ»
+   ========================================= */
+.mark-chip-wrap { display: inline-flex; }
+.mark-chip.is-clickable { cursor: pointer; transition: box-shadow 0.15s, transform 0.15s; }
+.mark-chip.is-clickable:hover { box-shadow: 0 2px 8px rgba(16, 80, 47, 0.16); transform: translateY(-1px); }
+.mark-chip.is-clickable:focus-visible { outline: 2px solid var(--green-500); outline-offset: 2px; }
+.mark-chip .hw-chevron { font-size: 13px; line-height: 1; color: var(--green-700); margin-top: 2px; }
+
+.subject-details { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.subject-details:empty { display: none; }
+.subject-details-item {
+  border: 1px dashed var(--line); border-radius: 10px;
+  background: var(--green-50); padding: 8px 10px;
+  font-size: 12.5px; color: var(--ink-soft); line-height: 1.4;
+}
+.subject-details-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  font-size: 12px; font-weight: 700; color: var(--green-700);
+}
+.subject-details-close {
+  margin-left: auto; border: none; background: transparent; cursor: pointer;
+  font-size: 18px; line-height: 1; color: var(--ink-soft); padding: 0 2px;
+}
+.subject-details-close:hover { color: var(--red); }
+.subject-details-body .dl-details { max-width: 100%; }
+.subject-details-body p.meta { margin: 0; }
+
+/* Подсветка найденной записи в дневнике */
+.dl-mark.is-highlight, .hw-task.is-highlight {
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px rgba(16, 80, 47, 0.18);
+}
+
+/* =========================================
+   ВКЛАДКА «НОВОЕ»
+   ========================================= */
+.new-section { margin-bottom: 14px; }
+.new-section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--ink-soft); margin-bottom: 6px;
+}
+.new-items { display: flex; flex-direction: column; gap: 6px; }
+.new-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border-radius: 12px; cursor: pointer;
+  background: var(--white); border: 1px solid var(--line);
+  box-shadow: var(--shadow); text-align: left; font: inherit; color: var(--ink);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.new-item:hover { border-color: var(--green-500); transform: translateY(-1px); }
+.new-item:focus-visible { outline: 2px solid var(--green-500); outline-offset: 2px; }
+.new-item .mark-value { min-width: 32px; height: 32px; font-size: 16px; }
+.new-item-mark { flex: 0 0 auto; font-size: 19px; line-height: 1; }
+.new-item-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.new-item-title {
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.new-item-text {
+  font-size: 12.5px; color: var(--ink-soft); line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.new-item-date {
+  flex: 0 0 auto; font-size: 11.5px; color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .new-item { padding: 7px 9px; gap: 8px; }
+  .new-item-date { display: none; }
+}
+
+/* =========================================
+   СЛУЖЕБНЫЙ РЕЖИМ
+   Технические элементы скрыты, пока пользователь
+   не включит «Служебный режим» в настройках.
+   ========================================= */
+.dev-only { display: none !important; }
+body.is-developer .dev-only { display: block !important; }
+body.is-developer span.dev-only { display: inline !important; }
+body.is-developer .settings-actions.dev-only { display: flex !important; }
+
+.login-school-row { margin-bottom: 10px; }
+#about-info { white-space: pre-line; }
+.login-school-label {
+  display: block; margin-bottom: 5px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+}
+.login-hint { margin: 0 0 4px; font-size: 11.5px; line-height: 1.4; }

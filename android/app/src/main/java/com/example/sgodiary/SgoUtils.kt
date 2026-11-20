@@ -10,6 +10,16 @@ internal const val DIARY_CACHE_TTL = 10 * 60 * 1000L
 /** Сколько живёт кэш тяжёлых ответов — успеваемость, периоды (мс). */
 internal const val DATA_CACHE_TTL = 10 * 60 * 1000L
 
+/** Сколько живёт кэш подробностей заданий (мс). */
+internal const val DETAILS_CACHE_TTL = 30 * 60 * 1000L
+
+/** Пауза между принудительными перечитываниями одной недели дневника (мс). */
+internal const val FORCE_DIARY_COOLDOWN = 60 * 1000L
+
+/** Версия приложения: показывается в служебном режиме. */
+internal const val APP_VERSION = "1.3"
+internal const val APP_BUILD = "2026-11-19"
+
 internal val WEEKDAYS = arrayOf(
     "воскресенье", "понедельник", "вторник", "среда",
     "четверг", "пятница", "суббота"

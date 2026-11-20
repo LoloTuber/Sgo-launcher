@@ -30,8 +30,12 @@ export const getResults = (term, mode) => {
   return fetchJson(qs ? `/api/results?${qs}` : "/api/results");
 };
 
-export const getDiary = (weekIso) => {
-  const url = weekIso ? `/api/diary?week=${weekIso}` : "/api/diary";
+export const getDiary = (weekIso, force) => {
+  const params = [];
+  if (weekIso) params.push(`week=${encodeURIComponent(weekIso)}`);
+  // refresh=1 — читать неделю заново, а не отдавать предзагруженную копию.
+  if (force) params.push("refresh=1");
+  const url = params.length ? `/api/diary?${params.join("&")}` : "/api/diary";
   return fetchJson(url);
 };
 
@@ -41,6 +45,19 @@ export const getSchedule = (weekIso) => {
 };
 
 export const getAssignmentDetails = (id) => fetchJson(`/api/assignment/${encodeURIComponent(id)}`);
+
+/** Сведения о сборке приложения — показываются в служебном режиме. */
+export const getAbout = () => fetchJson("/api/about");
+
+/**
+ * Просит сервер заранее загрузить подробности заданий.
+ * Сервер отвечает сразу, а сами подробности кладёт в кэш в фоне.
+ */
+export const preloadDetails = (ids) => {
+  const list = (ids || []).join(",");
+  if (!list) return Promise.resolve(null);
+  return fetchJson(`/api/assignment/preload?ids=${encodeURIComponent(list)}`);
+};
 
 /**
  * Предзагрузка соседних недель дневника (сервер делает это в фоне).

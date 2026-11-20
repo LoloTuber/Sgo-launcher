@@ -1,7 +1,11 @@
 import * as api from '../api.js';
-import { escapeHtml, shortDate, markCls, formatAverage, isImportantTalkSubject } from '../utils.js';
+import { escapeHtml, shortDate, markCls, isImportantTalkSubject } from '../utils.js';
 import { getSettings } from '../settings.js';
 import { isNewHomework, isNewMark, newHomeworkCount } from '../changes.js';
+import { renderAssignmentDetails, loadDetails, preloadDetails } from './details.js';
+import { userError } from '../errors.js';
+import { state } from '../state.js';
+import { weekStartIso } from '../utils.js';
 
 /**
  * Дневник: главный акцент — домашнее задание и подробности к нему.
@@ -79,6 +83,41 @@ export function renderDiary(data) {
       }
     });
   });
+
+  // Подробности заранее просим у сервера: к моменту клика они уже в кэше.
+  scheduleDetailsPreload(data);
+}
+
+/**
+ * Идентификаторы всех заданий недели (отметки и домашние задания).
+ * Их подробности сервер догрузит в фоне.
+ */
+function weekAssignmentIds(data) {
+  const ids = [];
+  for (const day of (data && data.days) || []) {
+    for (const lesson of day.lessons || []) {
+      for (const mark of lesson.marks || []) {
+        if (mark.id !== undefined && mark.id !== null && mark.id !== 0) ids.push(mark.id);
+      }
+      for (const task of lesson.tasks || []) {
+        if (task.id !== undefined && task.id !== null && task.id !== 0) ids.push(task.id);
+      }
+    }
+  }
+  return ids;
+}
+
+let _detailsPreloadKey = "";
+
+/** Не чаще раза в минуту на неделю просим сервер заранее взять подробности. */
+function scheduleDetailsPreload(data) {
+  const week = (data && data.weekStart) || "";
+  const ids = weekAssignmentIds(data);
+  if (!ids.length) return;
+  const key = `${week}:${ids.length}:${ids[0]}:${ids[ids.length - 1]}`;
+  if (key === _detailsPreloadKey) return;
+  _detailsPreloadKey = key;
+  setTimeout(() => preloadDetails(ids), 800);
 }
 
 function renderLesson(lesson, date) {
@@ -156,7 +195,8 @@ function renderTasks(tasks, date, lessonNumber) {
             : "";
           const isNew = isNewHomework(date, lessonNumber, task);
           return `
-            <div class="hw-task ${hasId ? "is-clickable" : ""} ${isNew ? "is-new" : ""}">
+            <div class="hw-task ${hasId ? "is-clickable" : ""} ${isNew ? "is-new" : ""}"
+                 ${hasId ? `data-task-id="${escapeHtml(task.id)}"` : ""}>
               <div class="hw-task-head" ${attrs}>
                 <span class="hw-task-text">${escapeHtml(task.text)}</span>
                 ${isNew ? `<span class="new-badge">новое</span>` : ""}
@@ -231,10 +271,10 @@ async function toggleMark(markEl) {
   details.innerHTML = `<p class="meta">Загружаю подробности…</p>`;
 
   try {
-    const data = await api.getAssignmentDetails(id);
-    details.innerHTML = renderDetails(data, markEl.dataset.markValue);
+    const data = await loadDetails(id);
+    details.innerHTML = renderAssignmentDetails(data, markEl.dataset.markValue);
   } catch (error) {
-    details.innerHTML = `<p class="hw-error">Не удалось загрузить: ${escapeHtml(error.message)}</p>`;
+    details.innerHTML = `<p class="hw-error">Не удалось загрузить: ${escapeHtml(userError(error.message))}</p>`;
   } finally {
     wrap.classList.remove("loading");
   }
@@ -268,91 +308,16 @@ async function toggleTask(head) {
   }
 
   try {
-    const data = await api.getAssignmentDetails(id);
+    const data = await loadDetails(id);
     // Тема задания у домашнего задания совпадает с его текстом — не дублируем.
-    if (details) details.innerHTML = renderDetails(data, "", true);
+    if (details) details.innerHTML = renderAssignmentDetails(data, "", true);
   } catch (error) {
     if (details) {
-      details.innerHTML = `<p class="hw-error">Не удалось загрузить: ${escapeHtml(error.message)}</p>`;
+      details.innerHTML = `<p class="hw-error">Не удалось загрузить: ${escapeHtml(userError(error.message))}</p>`;
     }
   } finally {
     task.classList.remove("loading");
   }
-}
-
-/**
- * Подробности по заданию (оценке или домашнему заданию).
- * Показываем всё, что отдаёт СГО: тема, предмет, дата, вес, учитель,
- * средний балл класса, распределение оценок класса, комментарий и файлы.
- */
-function renderDetails(data, markValue, skipTopic) {
-  const rows = [];
-  const add = (label, html) => {
-    if (html) rows.push(`<div class="dl-row"><span class="label">${label}</span><span class="value">${html}</span></div>`);
-  };
-
-  if (markValue) {
-    add("Оценка", `<span class="mark-value ${markCls(markValue)}">${escapeHtml(markValue)}</span>`);
-  }
-  add("Тема", skipTopic ? "" : escapeHtml(data.topic || ""));
-  add("Предмет", escapeHtml(data.subject || ""));
-  add("Дата", data.date ? escapeHtml(formatDateFull(data.date)) : "");
-  if (Number(data.weight) > 0) add("Вес", `×${escapeHtml(String(data.weight))}`);
-
-  if (data.teachers && data.teachers.length) {
-    add("Учитель", escapeHtml(data.teachers.join(", ")));
-  }
-
-  if (data.averageMark !== null && data.averageMark !== undefined && data.averageMark !== "") {
-    add("Средний балл класса", escapeHtml(formatAverage(data.averageMark)));
-  }
-
-  if (data.markStats && data.markStats.length) {
-    const chips = data.markStats.map((stat) => `
-      <span class="dl-class-mark">
-        <span class="mark-value ${markCls(stat.mark)}">${escapeHtml(String(stat.mark))}</span>
-        <span class="dl-class-mark-text">${escapeHtml(String(stat.count))} чел. · ${escapeHtml(String(stat.percentage))}%</span>
-      </span>`).join("");
-    rows.push(
-      `<div class="dl-row dl-row-wide">
-         <span class="label">Оценки класса</span>
-         <div class="dl-class-marks">${chips}</div>
-       </div>`
-    );
-  }
-
-  (data.details || []).forEach((text) => {
-    rows.push(
-      `<div class="dl-row dl-row-wide">
-         <span class="label">Комментарий</span>
-         <span class="value">${escapeHtml(text)}</span>
-       </div>`
-    );
-  });
-
-  if (data.files && data.files.length) {
-    rows.push(
-      `<div class="dl-row dl-row-wide">
-         <span class="label">Файлы</span>
-         <div class="files">${data.files
-           .map((file) => `<span class="file">📎 ${escapeHtml(file)}</span>`)
-           .join("")}</div>
-       </div>`
-    );
-  }
-
-  if (!rows.length) {
-    return `<p class="meta">Дополнительных сведений нет.</p>`;
-  }
-
-  return `<div class="dl-details">${rows.join("")}</div>`;
-}
-
-/** «2026-11-12» → «12.11.2026». */
-function formatDateFull(iso) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-  if (!match) return "";
-  return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
 /**
@@ -377,4 +342,87 @@ export function highlightDiaryDate(dateIso) {
   }
   setTimeout(() => target.classList.remove("is-highlight"), 4000);
   return true;
+}
+
+/**
+ * Подсвечивает конкретную запись внутри дня: оценку или домашнее задание.
+ * Оценку сразу раскрываем — пользователь пришёл именно за её подробностями.
+ */
+export function highlightDiaryItem(dateIso, options = {}) {
+  const list = document.querySelector("#diary-list");
+  const iso = String(dateIso || "");
+  if (!list || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+
+  const day = list.querySelector(`.diary-day[data-date="${iso}"]`);
+  if (!day) return false;
+
+  const markId = options.markId;
+  const taskId = options.taskId;
+
+  let target = null;
+  if (markId !== undefined && markId !== null && markId !== "") {
+    target = day.querySelector(`.dl-mark[data-mark-id="${CSS.escape(String(markId))}"]`);
+  }
+  if (!target && taskId !== undefined && taskId !== null && taskId !== "") {
+    target = day.querySelector(`.hw-task[data-task-id="${CSS.escape(String(taskId))}"]`);
+  }
+  if (!target) {
+    return highlightDiaryDate(iso);
+  }
+
+  list.querySelectorAll(".diary-day.is-highlight").forEach((el) => {
+    el.classList.remove("is-highlight");
+  });
+  day.classList.add("is-highlight");
+
+  const highlight = target.closest(".dl-mark-wrap") || target.closest(".hw-task") || target;
+  highlight.classList.add("is-highlight");
+  if (typeof highlight.scrollIntoView === "function") {
+    highlight.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  setTimeout(() => {
+    highlight.classList.remove("is-highlight");
+    day.classList.remove("is-highlight");
+  }, 6000);
+
+  // Открываем подробности выбранной записи.
+  if (markId !== undefined && markId !== null && markId !== "" && target.classList.contains("dl-mark")) {
+    target.click();
+  } else if (taskId !== undefined && taskId !== null && taskId !== "" && target.classList.contains("hw-task")) {
+    const head = target.querySelector(".hw-task-head");
+    if (head) head.click();
+  }
+
+  return true;
+}
+
+/**
+ * Открывает дневник на нужной дате и подсвечивает запись.
+ *
+ * Используется вкладкой «Новое»: по клику на новую оценку или новое
+ * задание мы переходим в дневник, открываем нужную неделю и показываем
+ * саму запись.
+ */
+export async function openDiaryAt(dateIso, options = {}) {
+  const iso = String(dateIso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+
+  // Переключаем вкладку дневника.
+  window.dispatchEvent(new CustomEvent("sgo:navigate", { detail: { tab: "diary" } }));
+
+  const week = weekStartIso(iso);
+  const loaded = state.diary && state.diary.weekStart === week;
+
+  if (!loaded) {
+    try {
+      const data = await api.getDiary(week);
+      state.diary = data;
+      state.currentWeek = data.weekStart || week;
+      renderDiary(data);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  return highlightDiaryItem(iso, options);
 }

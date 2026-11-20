@@ -41,6 +41,7 @@
 
 <nav class="tabs" id="tabs" role="tablist">
   <button class="tab is-active" type="button" data-tab="today" role="tab">Сегодня</button>
+  <button class="tab" type="button" data-tab="new" role="tab">Новое</button>
   <button class="tab" type="button" data-tab="homework" role="tab">ДЗ на завтра</button>
   <button class="tab" type="button" data-tab="diary" role="tab">Дневник</button>
   <button class="tab" type="button" data-tab="schedule" role="tab">Расписание</button>
@@ -63,6 +64,14 @@
       <div class="skeleton"></div>
       <div class="skeleton"></div>
     </div>
+  </section>
+
+  <section class="panel" data-panel="new">
+    <div class="panel-head">
+      <div><h2>Новое</h2><p class="subtle" id="new-sub">Здесь появляются новые оценки и задания</p></div>
+      <button id="new-read-all" class="btn btn-outline" type="button">Отметить прочитанным</button>
+    </div>
+    <div id="new-list" class="list"></div>
   </section>
 
   <section class="panel" data-panel="homework">
@@ -166,6 +175,7 @@
 
 <footer class="footer">
   <span id="updated">—</span>
+  <span class="dev-only" id="app-version"></span>
   <span>Только чтение · данные из «Сетевого города»</span>
 </footer>
 
@@ -179,6 +189,7 @@
       <p class="subtle">Какие разделы показывать в верхней панели.</p>
       <div class="settings-list">
         <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
+        <label><input type="checkbox" class="tab-toggle" value="new" checked> Новое</label>
         <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
         <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
         <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
@@ -243,9 +254,19 @@
       <div class="settings-block-title">💾 Сохранение данных</div>
       <label class="settings-check"><input type="checkbox" id="setting-cache"> Хранить данные для офлайна</label>
       <p class="subtle">Нужно, чтобы дневник, расписание и калькулятор открывались без интернета.</p>
-      <div class="settings-actions">
-        <button id="clear-cache-btn" class="btn-outline" type="button">Очистить сохранённые данные</button>
-        <button id="clear-changes-btn" class="btn-outline" type="button">Сбросить отметки «новое»</button>
+    </div>
+
+    <div class="settings-block">
+      <div class="settings-block-title">🛠 Служебное</div>
+      <label class="settings-check"><input type="checkbox" id="setting-developer"> Служебный режим</label>
+      <p class="subtle">Показывать технические подробности ошибок, ID школы при входе и сведения о сборке.</p>
+      <div class="dev-only">
+        <p class="subtle" id="about-info">Сведения о сборке загружаются…</p>
+        <div class="settings-actions">
+          <button id="copy-about-btn" class="btn-outline" type="button">Скопировать сведения</button>
+          <button id="clear-cache-btn" class="btn-outline" type="button">Очистить сохранённые данные</button>
+          <button id="clear-changes-btn" class="btn-outline" type="button">Сбросить отметки «новое»</button>
+        </div>
       </div>
     </div>
 
@@ -276,8 +297,13 @@
                autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
         <button type="button" id="login-pass-toggle" class="pass-toggle" aria-label="Показать пароль">👁</button>
       </div>
-      <input type="text" id="login-school" class="login-input" value="1244" placeholder="ID школы"
-             inputmode="numeric" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="login-school-row">
+        <label class="login-school-label" id="login-school-label" for="login-school">Школа</label>
+        <input type="text" id="login-school" class="login-input" value="1244"
+               placeholder="название школы, например СОШ № 15"
+               autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <p class="subtle login-hint" id="login-school-hint">Название школы или её ID — сервер определит ID сам. ID можно посмотреть в ссылке на «Сетевой город», которую дала школа.</p>
     </div>
 
     <button id="login-btn" class="btn" style="width: 100%; margin-top: 10px;">Войти</button>

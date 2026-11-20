@@ -183,7 +183,7 @@ internal fun SgoClient.getQuickJson(): String {
     return response.toString()
 }
 
-internal fun SgoClient.getDiaryJson(weekStr: String?): String {
+internal fun SgoClient.getDiaryJson(weekStr: String?, force: Boolean = false): String {
     val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     val monday = if (weekStr != null)
         sdf.parse(weekStr)!!
@@ -201,10 +201,20 @@ internal fun SgoClient.getDiaryJson(weekStr: String?): String {
     val weekStart = sdf.format(monday)
 
     // Свежая копия из кэша — отвечаем сразу, не дёргая СГО.
+    // force = true — читаем неделю заново (переход «След. неделя»),
+    // но не чаще раза в минуту, чтобы не долбить сервер СГО.
+    val now = System.currentTimeMillis()
     synchronized(diaryCache) {
         val cached = diaryCache[weekStart]
-        if (cached != null && System.currentTimeMillis() - cached.first < DIARY_CACHE_TTL) {
-            return cached.second
+        if (cached != null && now - cached.first < DIARY_CACHE_TTL) {
+            if (!force) {
+                return cached.second
+            }
+            val lastForced = synchronized(diaryForcedAt) { diaryForcedAt[weekStart] ?: 0L }
+            if (now - lastForced < FORCE_DIARY_COOLDOWN) {
+                return cached.second
+            }
+            synchronized(diaryForcedAt) { diaryForcedAt[weekStart] = now }
         }
     }
 

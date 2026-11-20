@@ -16,6 +16,9 @@ const MARK_STORE = "sgo.changes.marks.v1";
 const DIARY_MARK_STORE = "sgo.changes.diarymarks.v1";
 const HOMEWORK_STORE = "sgo.changes.homework.v1";
 const SCHEDULE_STORE = "sgo.changes.schedule.v1";
+// Реестр самих новых записей (оценки и задания) — для вкладки «Новое».
+const ITEMS_STORE = "sgo.changes.items.v1";
+const MAX_ITEMS = 120;
 
 const cache = {
   marksFingerprint: null,
@@ -25,6 +28,7 @@ const cache = {
   diaryNewMarks: new Set(),
   newHomework: new Set(),
   changedDays: new Set(),
+  newItems: [],
 };
 
 function readJson(key) {
@@ -81,6 +85,120 @@ export function homeworkKey(date, lessonNumber, task) {
   return `${asDate(date)}|${lessonNumber != null ? lessonNumber : ""}|${stable}`;
 }
 
+/** Запись реестра «Новое» по оценке в дневнике. */
+function markItem(day, lesson, mark, weekStart) {
+  const id = mark && mark.id;
+  return {
+    kind: "mark",
+    key: markKey((lesson && lesson.subject) || "", mark),
+    date: asDate(day && day.date),
+    weekStart: weekStart || "",
+    subject: (lesson && lesson.subject) || "",
+    value: String((mark && mark.value) != null ? mark.value : ""),
+    topic: (mark && mark.topic) || "",
+    type: (mark && mark.type) || "",
+    markId: id !== undefined && id !== null && id !== 0 && id !== "" ? id : null,
+  };
+}
+
+/** Запись реестра «Новое» по оценке из отчёта об успеваемости. */
+function reportMarkItem(subject, mark) {
+  const id = mark && mark.id;
+  return {
+    kind: "mark",
+    key: markKey(subject || "", mark),
+    date: asDate(mark && mark.date),
+    weekStart: "",
+    subject: subject || "",
+    value: String((mark && mark.value) != null ? mark.value : ""),
+    topic: (mark && mark.topic) || "",
+    type: (mark && mark.type) || "",
+    markId: id !== undefined && id !== null && id !== 0 && id !== "" ? id : null,
+  };
+}
+
+/** Запись реестра «Новое» по домашнему заданию. */
+function homeworkItem(day, lesson, task, weekStart) {
+  const id = task && task.id;
+  return {
+    kind: "homework",
+    key: homeworkKey(day && day.date, lesson && lesson.number, task),
+    date: asDate(day && day.date),
+    weekStart: weekStart || "",
+    subject: (lesson && lesson.subject) || "",
+    lessonNumber: lesson && lesson.number,
+    text: String((task && task.text) || "").trim(),
+    taskId: id !== undefined && id !== null && id !== 0 && id !== "" ? id : null,
+  };
+}
+
+/**
+ * Подпись записи для склейки дублей: одна и та же оценка может прийти
+ * и из дневника, и из отчёта об успеваемости.
+ */
+function itemSig(item) {
+  if (!item) return "";
+  if (item.kind === "homework") {
+    return `hw|${item.date}|${item.subject}|${item.lessonNumber}|${item.text}`;
+  }
+  return `mark|${item.subject}|${item.date}|${item.value}`;
+}
+
+/**
+ * Добавляет новые записи в реестр и сохраняет его.
+ * Записи с одинаковой подписью не дублируются: приоритет у той,
+ * где больше данных (например, есть тема работы).
+ */
+function mergeNewItems(fresh) {
+  if (!fresh || !fresh.length) return;
+
+  const store = readJson(ITEMS_STORE) || {};
+  const previous = Array.isArray(store.items) ? store.items : [];
+  const freshKeys = new Set(fresh.map((item) => item.key));
+
+  const merged = fresh.slice();
+  for (const item of previous) {
+    if (!item || !item.key) continue;
+    if (freshKeys.has(item.key)) continue;
+    merged.push(item);
+  }
+
+  const bySig = new Map();
+  const result = [];
+  for (const item of merged) {
+    const sig = itemSig(item);
+    const existing = bySig.get(sig);
+    if (existing) {
+      // Дубль: оставляем запись с большим количеством данных.
+      if (!existing.topic && item.topic) {
+        Object.assign(existing, item);
+      }
+      continue;
+    }
+    bySig.set(sig, item);
+    result.push(item);
+    if (result.length >= MAX_ITEMS) break;
+  }
+
+  cache.newItems = result;
+  writeJson(ITEMS_STORE, { items: result });
+}
+
+/** Все новые записи: сначала самые свежие по дате. */
+export function getNewItems() {
+  const items = Array.isArray(cache.newItems) ? cache.newItems : [];
+  return items.slice().sort((a, b) => {
+    const dateA = String(a.date || "");
+    const dateB = String(b.date || "");
+    if (dateA !== dateB) return dateA < dateB ? 1 : -1;
+    return 0;
+  });
+}
+
+export function newItemsCount() {
+  return (cache.newItems || []).length;
+}
+
 function daySignature(day) {
   return (day && day.lessons ? day.lessons : [])
     .map((lesson) => [
@@ -102,9 +220,11 @@ function updateGrades() {
 
   const termKey = data.term || "current";
   const keys = [];
+  const items = [];
   for (const subject of data.subjects) {
     for (const mark of subject.marks || []) {
       keys.push(markKey(subject.name, mark));
+      items.push(reportMarkItem(subject.name, mark));
     }
   }
 
@@ -126,6 +246,11 @@ function updateGrades() {
 
   store[termKey] = uniqueKeys;
   writeJson(MARK_STORE, store);
+
+  // Реестр «Новое»: только появившиеся оценки.
+  if (cache.newMarks.size) {
+    mergeNewItems(items.filter((item) => cache.newMarks.has(item.key)));
+  }
   return true;
 }
 
@@ -143,10 +268,12 @@ function updateDiaryMarks() {
 
   const weekKey = diary.weekStart || "current-week";
   const keys = [];
+  const items = [];
   for (const day of diary.days) {
     for (const lesson of day.lessons || []) {
       for (const mark of lesson.marks || []) {
         keys.push(markKey(lesson.subject || "", mark));
+        items.push(markItem(day, lesson, mark, weekKey));
       }
     }
   }
@@ -173,6 +300,11 @@ function updateDiaryMarks() {
     for (const old of weeks.slice(0, weeks.length - 12)) delete store[old];
   }
   writeJson(DIARY_MARK_STORE, store);
+
+  // Реестр «Новое»: появившиеся отметки дневника.
+  if (cache.diaryNewMarks.size) {
+    mergeNewItems(items.filter((item) => cache.diaryNewMarks.has(item.key)));
+  }
   return cache.diaryNewMarks.size > 0;
 }
 
@@ -182,11 +314,13 @@ function updateHomework() {
 
   const weekKey = diary.weekStart || "current-week";
   const keys = [];
+  const items = [];
   for (const day of diary.days) {
     for (const lesson of day.lessons || []) {
       for (const task of lesson.tasks || []) {
         if (!String(task && task.text || "").trim()) continue;
         keys.push(homeworkKey(day.date, lesson.number, task));
+        items.push(homeworkItem(day, lesson, task, weekKey));
       }
     }
   }
@@ -217,6 +351,11 @@ function updateHomework() {
   }
 
   writeJson(HOMEWORK_STORE, { weeks });
+
+  // Реестр «Новое»: появившиеся домашние задания.
+  if (cache.newHomework.size) {
+    mergeNewItems(items.filter((item) => cache.newHomework.has(item.key)));
+  }
   return true;
 }
 
@@ -269,6 +408,7 @@ export function updateTabBadges() {
   const marks = allNewMarks().size;
   const homework = cache.newHomework.size;
   const schedule = cache.changedDays.size;
+  const items = newItemsCount();
 
   // Глобальная кнопка «Отметить всё прочитанным» в шапке.
   const globalButton = document.querySelector("#mark-read");
@@ -278,6 +418,7 @@ export function updateTabBadges() {
   setTabBadge("diary", homework > 0, `Новых заданий: ${homework}`);
   setTabBadge("schedule", schedule > 0, "В расписании были изменения");
   setTabBadge("today", marks + homework + schedule > 0, "Есть новые данные");
+  setTabBadge("new", items > 0, `Новых записей: ${items}`);
 }
 
 /** Все новые оценки: и из успеваемости, и из дневника. */
@@ -337,6 +478,8 @@ export function markAllRead() {
   cache.diaryNewMarks = new Set();
   cache.newHomework = new Set();
   cache.changedDays = new Set();
+  cache.newItems = [];
+  writeJson(ITEMS_STORE, { items: [] });
   updateTabBadges();
 }
 
@@ -346,6 +489,7 @@ export function clearChanges() {
   removeKey(DIARY_MARK_STORE);
   removeKey(HOMEWORK_STORE);
   removeKey(SCHEDULE_STORE);
+  removeKey(ITEMS_STORE);
   cache.marksFingerprint = null;
   cache.homeworkFingerprint = null;
   cache.scheduleFingerprint = null;
@@ -353,5 +497,15 @@ export function clearChanges() {
   cache.diaryNewMarks = new Set();
   cache.newHomework = new Set();
   cache.changedDays = new Set();
+  cache.newItems = [];
   updateTabBadges();
+}
+
+// Реестр новых записей восстанавливаем сразу: вкладка «Новое» должна быть
+// готова ещё до первой загрузки данных.
+{
+  const stored = readJson(ITEMS_STORE);
+  if (stored && Array.isArray(stored.items)) {
+    cache.newItems = stored.items.filter((item) => item && item.key);
+  }
 }

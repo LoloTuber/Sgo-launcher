@@ -21,6 +21,7 @@ const DEFAULTS = Object.freeze({
   notifyHomework: true,     // уведомлять о новом домашнем задании
   backgroundInterval: "10", // интервал проверки, минут
   autostart: false,         // запуск вместе с Windows (только на ПК)
+  developerMode: false,     // служебные настройки и технические подробности
 });
 
 const STORAGE_KEYS = {
@@ -34,6 +35,7 @@ const STORAGE_KEYS = {
   notifyHomework: "sgo.notifyHomework",
   backgroundInterval: "sgo.backgroundInterval",
   autostart: "sgo.autostart",
+  developerMode: "sgo.developerMode",
 };
 
 const FONT_SIZES = ["normal", "large", "xlarge"];
@@ -81,12 +83,18 @@ function load() {
     notifyHomework: readBool(STORAGE_KEYS.notifyHomework, DEFAULTS.notifyHomework),
     backgroundInterval: INTERVALS.includes(interval) ? interval : DEFAULTS.backgroundInterval,
     autostart: readBool(STORAGE_KEYS.autostart, DEFAULTS.autostart),
+    developerMode: readBool(STORAGE_KEYS.developerMode, DEFAULTS.developerMode),
   };
   return cached;
 }
 
 export function getSettings() {
   return cached || load();
+}
+
+/** Включён ли служебный режим: технические подробности и служебные настройки. */
+export function isDeveloperMode() {
+  return !!getSettings().developerMode;
 }
 
 /** Применяет настройки к <body>. Вызывается при старте и после изменений. */
@@ -98,7 +106,35 @@ export function applyUiSettings() {
   body.classList.toggle("is-compact", !!s.compact);
   body.classList.toggle("font-large", s.fontSize === "large");
   body.classList.toggle("font-xlarge", s.fontSize === "xlarge");
+  // Служебные элементы помечены классом dev-only и показываются только здесь.
+  body.classList.toggle("is-developer", !!s.developerMode);
+  applySchoolField(s);
   return s;
+}
+
+/**
+ * Поле школы на экране входа.
+ *
+ * Обычному пользователю нужен «человеческий» вариант — название школы,
+ * ID школы определяется автоматически. Служебный режим оставляет
+ * возможность вписать ID вручную.
+ */
+function applySchoolField(s) {
+  const label = document.querySelector("#login-school-label");
+  if (label) label.textContent = s.developerMode ? "ID школы" : "Школа";
+  const input = document.querySelector("#login-school");
+  if (input) {
+    input.placeholder = s.developerMode ? "1244" : "название школы, например СОШ № 15";
+    input.title = s.developerMode
+      ? "Числовой ID школы из «Сетевого города»"
+      : "Название школы или её ID — сервер определит ID сам";
+  }
+  const hint = document.querySelector("#login-school-hint");
+  if (hint) {
+    hint.textContent = s.developerMode
+      ? "ID школы — число из ссылки на «Сетевой город» (например, scid=1244)."
+      : "Название школы или её ID — сервер определит ID сам. ID можно посмотреть в ссылке на «Сетевой город», которую дала школа.";
+  }
 }
 
 export function setSetting(name, value) {
@@ -186,6 +222,7 @@ export function applySettingsToControls() {
   set("#setting-notify-marks", s.notifyMarks);
   set("#setting-notify-homework", s.notifyHomework);
   set("#setting-autostart", s.autostart);
+  set("#setting-developer", s.developerMode);
 
   const fontSize = document.querySelector("#setting-font-size");
   if (fontSize) fontSize.value = s.fontSize;
@@ -221,6 +258,7 @@ export function bindSettingsControls(onChange) {
   const notifyHomework = document.querySelector("#setting-notify-homework");
   const interval = document.querySelector("#setting-interval");
   const autostart = document.querySelector("#setting-autostart");
+  const developer = document.querySelector("#setting-developer");
 
   if (compact) {
     compact.addEventListener("change", () => {
@@ -291,6 +329,13 @@ export function bindSettingsControls(onChange) {
       if (onChange) onChange("autostart", autostart.checked);
       // После переключения нативная часть снимает пояснение — обновляем его.
       setTimeout(() => { refreshAutostartNote(); }, 150);
+    });
+  }
+
+  if (developer) {
+    developer.addEventListener("change", () => {
+      setSetting("developerMode", developer.checked);
+      if (onChange) onChange("developerMode", developer.checked);
     });
   }
 }
