@@ -48,6 +48,13 @@ private fun SgoClient.getStudentTotalHtmlOnce(termId: String?): String? {
     }
 
     val selectedData = JSONArray()
+    // СГО режет данные отчёта по фильтру «period» (интервал дат), а не по
+    // TERMID: без явных дат смена триместра не меняет ничего. Поэтому
+    // вместе с TERMID всегда передаём даты выбранного периода.
+    val periodValue = periodFilterValue(termId)
+    if (periodValue.isNotEmpty()) {
+        Log.i("SGO_REPORT", "period для termId=$termId: $periodValue")
+    }
     for (i in 0 until filterSources.length()) {
         val source = filterSources.getJSONObject(i)
         val filterId = source.optString("filterId")
@@ -55,6 +62,7 @@ private fun SgoClient.getStudentTotalHtmlOnce(termId: String?): String? {
 
         var value = source.optString("defaultValue")
         if (filterId == "TERMID" && termId != null) value = termId
+        if (filterId == "period" && periodValue.isNotEmpty()) value = periodValue
         if (value.isEmpty()) continue
 
         var text = ""
@@ -79,6 +87,9 @@ private fun SgoClient.getStudentTotalHtmlOnce(termId: String?): String? {
         put(JSONObject().apply { put("name", "DATEFORMAT"); put("value", "d\u0001mm\u0001yy\u0001.") })
         if (!termId.isNullOrEmpty()) {
             put(JSONObject().apply { put("name", "TERMID"); put("value", termId) })
+        }
+        if (periodValue.isNotEmpty()) {
+            put(JSONObject().apply { put("name", "period"); put("value", periodValue) })
         }
     }
 

@@ -633,8 +633,10 @@ function ensureVisibleTab() {
 //   3) обновляем экран и перезаписываем кэш.
 // При сетевой ошибке кэш остаётся на экране, а сверху появляется баннер.
 
-const gradesCacheKey = (term) => `grades.${term || "current"}`;
-const resultsCacheKey = (term, mode) => `results.${mode}.${term || "year"}`;
+// Версия ключа кэша: 1.3 собирал данные за период по умолчанию (текущему),
+// поэтому после починки смены триместра старые снимки нельзя показывать.
+const gradesCacheKey = (term) => `grades.v2.${term || "current"}`;
+const resultsCacheKey = (term, mode) => `results.v2.${mode}.${term || "year"}`;
 const diaryCacheKey = (week) => `diary.${week || "current"}`;
 const scheduleCacheKey = (week) => `schedule.${week || "current"}`;
 

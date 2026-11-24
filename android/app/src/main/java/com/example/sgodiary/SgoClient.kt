@@ -66,6 +66,10 @@ class SgoClient {
     internal var currentTermId: String = ""
     internal var organizationName: String = ""
 
+    // Каникулярные блоки (начало, конец) из дашборда — нужны, чтобы
+    // восстановить границы прошлых учебных периодов.
+    internal var vacationRanges: List<Pair<String, String>> = emptyList()
+
     // Кэш весов оценок: заполняется в SgoWeights.kt, читается оттуда же.
     internal val weightsCache = mutableMapOf<String, List<WeightEntry>>()
 
@@ -86,6 +90,10 @@ class SgoClient {
     // нужно, чтобы «След. неделя» не превращалась в частые запросы.
     internal val diaryForcedAt = mutableMapOf<String, Long>()
 
+    // Кэш границ учебных периодов: id → (начало, конец).
+    internal val termPeriodsCache =
+        mutableMapOf<String, Pair<Long, Map<String, Pair<String, String>>>>()
+
     fun isLoggedIn() = token != null
 
     fun reset() {
@@ -96,6 +104,7 @@ class SgoClient {
         synchronized(jsonCache) { jsonCache.clear() }
         synchronized(detailsCache) { detailsCache.clear() }
         synchronized(diaryForcedAt) { diaryForcedAt.clear() }
+        synchronized(termPeriodsCache) { termPeriodsCache.clear() }
     }
 
     fun isTokenExpired(): Boolean {
@@ -192,6 +201,17 @@ class SgoClient {
             termStart = dash.optString("termStartDate")
             termEnd = dash.optString("termEndDate")
             currentTermId = dash.optString("termId")
+
+            // Каникулы — по ним восстанавливаются границы прошлых периодов.
+            val vacations = dash.optJSONArray("vacations") ?: JSONArray()
+            val ranges = mutableListOf<Pair<String, String>>()
+            for (i in 0 until vacations.length()) {
+                val item = vacations.optJSONObject(i) ?: continue
+                val from = item.optString("startDate")
+                val to = item.optString("endDate")
+                if (from.isNotEmpty() && to.isNotEmpty()) ranges.add(from to to)
+            }
+            vacationRanges = ranges
 
             return true
         } catch (e: Exception) {

@@ -3,11 +3,27 @@ import { isNewMark, newMarksCount } from '../changes.js';
 import { loadDetails, renderAssignmentDetails } from './details.js';
 import { userError } from '../errors.js';
 
+/** Диапазон дат периода: «01.09.2026 – 22.11.2026». */
+function periodRange(data) {
+  if (!data || !data.termStart || !data.termEnd) return "";
+  const fmt = (iso) => {
+    const parts = String(iso).split("-");
+    if (parts.length !== 3) return "";
+    return `${parts[2]}.${parts[1]}.${parts[0]}`;
+  };
+  const from = fmt(data.termStart);
+  const to = fmt(data.termEnd);
+  return from && to ? `${from} – ${to}` : "";
+}
+
 export function renderGrades(data) {
   const label = document.querySelector("#grades-sub");
   const term = escapeHtml(data.term || "Текущий период");
+  const range = periodRange(data);
   const fresh = newMarksCount();
-  label.innerHTML = `Отметки за период · ${term}` + (fresh ? ` · новых: ${fresh}` : "");
+  label.innerHTML = `Отметки за период · ${term}` +
+    (range ? ` · ${escapeHtml(range)}` : "") +
+    (fresh ? ` · новых: ${fresh}` : "");
 
   const counts = data.counts || {};
   const summary = [
@@ -182,10 +198,12 @@ export function renderResults(results) {
   // Подпись над списком: выбранный режим и период.
   const sub = document.querySelector("#results-sub");
   if (sub) {
+    const range = periodRange(results);
     const period = results.term ? ` · ${results.term}` : "";
+    const dates = range ? ` · ${range}` : "";
     sub.textContent = mode === "year"
       ? `Годовые отметки${period}`
-      : `Рейтинг предметов по среднему баллу${period}`;
+      : `Рейтинг предметов по среднему баллу${period}${dates}`;
   }
 
   // Сообщение об ошибке/предупреждении от бэкенда — показываем всегда сверху.
@@ -352,7 +370,10 @@ export function renderAttendance(data) {
   const att = data.attendance || { items: [], counts: {} };
   const label = document.querySelector("#att-sub");
   const term = escapeHtml(data.term || "Текущий период");
-  label.innerHTML = `${term}${data.asOf ? ` · данные на ${escapeHtml(data.asOf)}` : ""}`;
+  const range = periodRange(data);
+  label.innerHTML = `${term}` +
+    (range ? ` · ${escapeHtml(range)}` : "") +
+    (data.asOf ? ` · данные на ${escapeHtml(data.asOf)}` : "");
 
   const list = document.querySelector("#att-list");
   const items = att.items || [];

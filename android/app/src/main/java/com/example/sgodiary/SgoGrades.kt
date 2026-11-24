@@ -47,6 +47,19 @@ private fun SgoClient.buildGradesJson(termId: String?): String {
                 } catch (e: Exception) {
                     Log.w("SGO", "Не удалось применить веса оценок", e)
                 }
+                // Даты выбранного периода — чтобы в интерфейсе было видно,
+                // за какой именно отрезок времени пришли данные.
+                try {
+                    val period = termPeriodRanges()[termId ?: ""]
+                    if (period != null) {
+                        parsed.put("termStart", period.first)
+                        parsed.put("termEnd", period.second)
+                    }
+                } catch (e: AuthExpiredException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("SGO_GRADES", "Не удалось добавить даты периода", e)
+                }
                 return parsed.toString()
             }
         } catch (e: AuthExpiredException) {

@@ -287,9 +287,7 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
         current_term_id = str(dash.get("termId") or "")
         current_term_name = str(dash.get("termName") or "")
 
-        overrides = {}
-        if term_id:
-            overrides["TERMID"] = term_id
+        overrides = _term_overrides(state, term_id)
         try:
             def producer():
                 html = state.reports.generate_html("StudentTotal", overrides)
@@ -368,6 +366,13 @@ def results_by_term_data(state: AppState, term_id: Optional[str], mode: str = "c
                 f"хотя запрошен «{label}». Возможно, этот период не поддерживается."
             )
         result["requestedTermId"] = term_id
+        try:
+            period = term_period_ranges(state).get(str(term_id or "")) if term_id else None
+        except Exception:
+            period = None
+        if period:
+            result["termStart"] = period[0].isoformat()
+            result["termEnd"] = period[1].isoformat()
         return result
 
 
@@ -539,6 +544,37 @@ def schedule_data(state: AppState, week_start: Optional[str] = None) -> Dict[str
     days.sort(key=lambda x: x["date"])
     return {"weekStart": monday.isoformat(), "weekEnd": (monday + timedelta(days=6)).isoformat(), "days": days}
 
+def _term_list(state: AppState) -> List[Dict[str, str]]:
+    """Все учебные периоды из filterSources отчёта StudentTotal (хронологически).
+
+    Сразу после логина СГО иногда возвращает пустой filterSources — делаем
+    один retry через 500 мс.
+    """
+    sources: List[Dict[str, Any]] = []
+    try:
+        sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
+    except Exception:
+        sources = []
+    if not sources:
+        time.sleep(0.5)
+        try:
+            sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
+        except Exception:
+            sources = []
+
+    result: List[Dict[str, str]] = []
+    for src in sources:
+        if src.get("filterId") != "TERMID":
+            continue
+        for item in src.get("items") or []:
+            value = str(item.get("value") or "").strip()
+            if not value or value == "-1":
+                continue
+            result.append({"id": value, "name": str(item.get("title") or "")})
+        break
+    return result
+
+
 def terms_data(state: AppState) -> List[Dict[str, str]]:
     """Список учебных периодов для UI. Только до текущего включительно.
 
@@ -547,35 +583,10 @@ def terms_data(state: AppState) -> List[Dict[str, str]]:
       не строится (queue возвращает taskId=-1). UI не должен их показывать,
       иначе пользователь видит данные текущего триместра под видом «2 триместр».
     - «-1 — Произвольный интервал» тоже убираем: это не период, а спец-опция.
-    - Сразу после логина СГО иногда возвращает пустой filterSources — делаем
-      один retry через 500 мс.
     """
     with state.lock:
         state.connect()
-
-        sources: List[Dict[str, Any]] = []
-        try:
-            sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
-        except Exception:
-            sources = []
-
-        if not sources:
-            time.sleep(0.5)
-            try:
-                sources = (state.client.get("reports/StudentTotal") or {}).get("filterSources") or []
-            except Exception:
-                sources = []
-
-        all_terms: List[Dict[str, str]] = []
-        for src in sources:
-            if src.get("filterId") != "TERMID":
-                continue
-            for item in src.get("items") or []:
-                value = str(item.get("value") or "").strip()
-                if not value or value == "-1":
-                    continue
-                all_terms.append({"id": value, "name": str(item.get("title") or "")})
-            break
+        all_terms = _term_list(state)
 
         # Текущий триместр из дашборда
         current_id = ""
@@ -595,12 +606,139 @@ def terms_data(state: AppState) -> List[Dict[str, str]]:
                         cutoff = i
                         break
                 if cutoff >= 0:
-                    return all_terms[: cutoff + 1]
-            return all_terms
+                    all_terms = all_terms[: cutoff + 1]
+        elif current_id:
+            all_terms = [{"id": current_id, "name": current_name or "Текущий период"}]
+        else:
+            return []
 
-        if current_id:
-            return [{"id": current_id, "name": current_name or "Текущий период"}]
-        return []
+        # Даты периода — чтобы в интерфейсе было видно, за какой именно
+        # отрезок времени пришли данные.
+        try:
+            ranges = term_period_ranges(state)
+        except Exception:
+            ranges = {}
+        for term in all_terms:
+            period = ranges.get(term["id"])
+            if period:
+                term["start"] = period[0].isoformat()
+                term["end"] = period[1].isoformat()
+        return all_terms
+
+
+def _vacation_blocks(dash: Dict[str, Any]) -> List[tuple]:
+    """Каникулярные блоки (начало, конец) из дашборда."""
+    blocks: List[tuple] = []
+    for item in dash.get("vacations") or []:
+        if not isinstance(item, dict):
+            continue
+        start = _as_date(item.get("startDate"))
+        end = _as_date(item.get("endDate"))
+        if start and end:
+            blocks.append((start, end))
+    blocks.sort(key=lambda pair: pair[1])
+    return blocks
+
+
+def _nearest_vacation_end(blocks: List[tuple], ideal: date, lo: date, hi: date) -> date:
+    """Ближайший к «идеальной» границе конец каникулярного блока."""
+    best: Optional[date] = None
+    best_delta: Optional[int] = None
+    for _, end in blocks:
+        if end < lo or end > hi:
+            continue
+        delta = abs((end - ideal).days)
+        if best_delta is None or delta < best_delta:
+            best, best_delta = end, delta
+    return best or ideal
+
+
+def term_period_ranges(state: AppState) -> Dict[str, tuple]:
+    """Границы (начало, конец) учебных периодов по их id.
+
+    Почему это нужно: в отчёте StudentTotal СГО меняет заголовок
+    «Учебный период» по фильтру TERMID, но сами данные всегда режет по
+    фильтру «period» — интервалу дат. Поэтому при смене триместра без
+    явных дат приходили те же самые оценки текущего периода.
+
+    Точные даты есть только у текущего периода (дашборд). Границы прошлых
+    восстанавливаем так:
+    - учебный год начинается 1 сентября;
+    - конец периода = начало следующего − 1 день;
+    - внутренние границы ставим по каникулам: берём конец каникулярного
+      блока, ближайший к середине промежутка.
+    """
+    def producer() -> Dict[str, tuple]:
+        with state.lock:
+            state.connect()
+            dash = dashboard_data(state)
+            current_id = str(dash.get("termId") or "")
+            cur_start = _as_date(dash.get("termStartDate"))
+            cur_end = _as_date(dash.get("termEndDate"))
+            terms = _term_list(state)
+            if not terms or not cur_start:
+                return {}
+
+            ids = [t["id"] for t in terms]
+            if current_id in ids:
+                idx = ids.index(current_id)
+            else:
+                idx = len(ids) - 1
+
+            ranges: Dict[str, tuple] = {}
+            if current_id:
+                ranges[current_id] = (cur_start, cur_end or cur_start)
+
+            past = ids[:idx]
+            if past:
+                # Учебный год начинается 1 сентября.
+                year = cur_start.year if cur_start.month >= 9 else cur_start.year - 1
+                span_start = date(year, 9, 1)
+                span_end = cur_start - timedelta(days=1)
+                blocks = _vacation_blocks(dash)
+                count = len(past)
+                if count == 1:
+                    ranges[past[0]] = (span_start, span_end)
+                else:
+                    days = (span_end - span_start).days + 1
+                    boundaries: List[date] = []
+                    for k in range(1, count):
+                        ideal = span_start + timedelta(days=round(days * k / count))
+                        boundaries.append(_nearest_vacation_end(blocks, ideal, span_start, span_end))
+                    prev_start = span_start
+                    for i, term_id in enumerate(past):
+                        end = boundaries[i] if i < len(boundaries) else span_end
+                        if end < prev_start:
+                            end = prev_start
+                        ranges[term_id] = (prev_start, end)
+                        prev_start = end + timedelta(days=1)
+            return ranges
+
+    return state.cached("term_period_ranges", 1800, producer)
+
+
+def _period_filter_value(period: Optional[tuple]) -> str:
+    """Значение фильтра «period» для СГО в формате отчёта."""
+    if not period:
+        return ""
+    start, end = period
+    return "%sT00:00:00.0000000 - %sT00:00:00.0000000" % (start.isoformat(), end.isoformat())
+
+
+def _term_overrides(state: AppState, term_id: Optional[str]) -> Dict[str, str]:
+    """Фильтры отчёта для выбранного периода: TERMID + интервал дат."""
+    if not term_id:
+        return {}
+    overrides = {"TERMID": str(term_id)}
+    try:
+        period = term_period_ranges(state).get(str(term_id))
+    except Exception:
+        period = None
+    value = _period_filter_value(period)
+    if value:
+        overrides["period"] = value
+    return overrides
+
 
 def _subject_key(name: Any) -> str:
     """Нормализованное имя предмета для сопоставления отчёта и дневника."""
@@ -767,8 +905,7 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
         dash = dashboard_data(state)
         current_term_id = str(dash.get("termId") or "")
 
-        overrides = {}
-        if term_id: overrides["TERMID"] = term_id
+        overrides = _term_overrides(state, term_id)
         report_key = f"report:studenttotal:{term_id or 'current'}"
         try:
             def producer():
@@ -865,6 +1002,15 @@ def grades_data(state: AppState, term_id: str = None) -> Dict[str, Any]:
                                "available": bool(parsed.get("subjects"))},
                 "asOf": parsed.get("as_of") or "", "term": parsed.get("term") or dash.get("termName") or "",
             }
+            # Даты выбранного периода — чтобы в интерфейсе было видно,
+            # за какой именно отрезок времени пришли данные.
+            try:
+                period = term_period_ranges(state).get(str(term_id or "")) if term_id else None
+            except Exception:
+                period = None
+            if period:
+                payload["termStart"] = period[0].isoformat()
+                payload["termEnd"] = period[1].isoformat()
             # Запоминаем, чтобы при лимите запросов у СГО показать эти данные,
             # а не пустые списки.
             state.remember(f"grades:lastgood:{term_id or 'current'}", payload)

@@ -33,6 +33,18 @@ internal fun SgoClient.getResultsJson(termId: String?, mode: String): String {
                     Log.w("SGO_RESULTS", "Не удалось применить веса оценок", e)
                 }
                 val built = JSONObject(buildResultsFromParsed(parsed, termId, yearMode))
+                // Даты выбранного периода — для подписи в интерфейсе.
+                try {
+                    val period = termPeriodRanges()[termId ?: ""]
+                    if (period != null) {
+                        built.put("termStart", period.first)
+                        built.put("termEnd", period.second)
+                    }
+                } catch (e: AuthExpiredException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("SGO_RESULTS", "Не удалось добавить даты периода", e)
+                }
                 // Если из отчёта не получилось ни одного числового балла —
                 // считаем по данным дневника, иначе вкладка останется пустой.
                 val subjects = built.optJSONArray("subjects") ?: JSONArray()

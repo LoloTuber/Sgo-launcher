@@ -132,7 +132,22 @@ private fun SgoClient.buildTermsJson(): String {
         filtered
     }
 
+    // Добавляем даты периода — чтобы в интерфейсе было видно, за какой
+    // именно отрезок времени пришли данные.
+    try {
+        val ranges = termPeriodRanges()
+        for (i in 0 until finalArr.length()) {
+            val item = finalArr.getJSONObject(i)
+            val period = ranges[item.optString("id")] ?: continue
+            item.put("start", period.first)
+            item.put("end", period.second)
+        }
+    } catch (e: AuthExpiredException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("SGO_TERMS", "Не удалось добавить даты периодов: ${e.message}")
+    }
+
     val result = JSONObject().put("ok", true).put("terms", finalArr).toString()
     Log.i("SGO_TERMS", "Result: $result")
-    return result
-}
+    return result}
