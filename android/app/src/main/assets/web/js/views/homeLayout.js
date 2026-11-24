@@ -9,7 +9,7 @@
 import {
   HOME_MODULES, getHomeLayout, setModuleVisible, setModuleOrder, moveModule,
   setModuleSpan, getModuleSpan, setGridColumns, getGridColumns, moduleTitle,
-  saveHomeLayout, MAX_SPAN,
+  saveHomeLayout,
 } from "../modules.js";
 import { escapeHtml } from "../utils.js";
 
@@ -23,19 +23,23 @@ let dragId = null;
 export function renderModuleList(container, onChanged) {
   if (!container) return;
   const layout = getHomeLayout();
+  const columns = getGridColumns(layout);
 
   const items = layout.order.map((id, index) => {
     const meta = HOME_MODULES.find((item) => item.id === id);
     const visible = !layout.hidden.includes(id);
     const title = meta ? meta.title : moduleTitle(id);
     const hint = meta ? meta.hint : "";
-    const span = getModuleSpan(id, layout);
-    const spans = Array.from({ length: MAX_SPAN }, (_, i) => i + 1)
-      .map((value) => `
-        <button class="module-span-btn ${value === span ? "is-active" : ""}" type="button"
-                data-span="${value}" data-module-id="${escapeHtml(id)}"
-                title="${value} ${value === 1 ? "колонка" : "колонки"}">${value}</button>`)
-      .join("");
+    const span = Math.min(getModuleSpan(id, layout), columns);
+
+    // Ширина одной колонки, когда колонка одна, смысла не имеет.
+    const widthSelect = columns > 1
+      ? `<select class="module-width" data-module-id="${escapeHtml(id)}" aria-label="Ширина модуля">
+           ${Array.from({ length: columns }, (_, i) => i + 1).map((value) => `
+             <option value="${value}" ${value === span ? "selected" : ""}>${value}</option>`).join("")}
+         </select>`
+      : "";
+
     return `
       <div class="module-row ${visible ? "" : "is-hidden"}" draggable="true" data-module-id="${escapeHtml(id)}">
         <span class="module-drag" title="Перетащите, чтобы изменить порядок">⋮⋮</span>
@@ -44,7 +48,7 @@ export function renderModuleList(container, onChanged) {
           <span class="module-row-title">${escapeHtml(title)}</span>
           <span class="module-row-hint">${escapeHtml(hint)}</span>
         </label>
-        <span class="module-row-span" title="Ширина модуля в колонках">${spans}</span>
+        <span class="module-row-width">${widthSelect}</span>
         <span class="module-row-move">
           <button class="module-move-btn" type="button" data-move="-1" data-module-id="${escapeHtml(id)}"
                   title="Поднять выше" aria-label="Поднять выше" ${index === 0 ? "disabled" : ""}>↑</button>
@@ -67,9 +71,9 @@ export function renderModuleList(container, onChanged) {
   });
 
   // Ширина модуля в колонках.
-  container.querySelectorAll(".module-span-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      setModuleSpan(btn.dataset.moduleId, Number(btn.dataset.span));
+  container.querySelectorAll(".module-width").forEach((select) => {
+    select.addEventListener("change", () => {
+      setModuleSpan(select.dataset.moduleId, Number(select.value));
       renderModuleList(container, onChanged);
       if (onChanged) onChanged();
     });
@@ -144,7 +148,7 @@ export function resetModuleLayout(container, onChanged) {
   layout.order = defaults;
   layout.hidden = [];
   layout.spans = {};
-  layout.columns = 3;
+  layout.columns = 1;
   layout.wide = [];
   setModuleOrder(defaults);
   saveHomeLayout(layout);

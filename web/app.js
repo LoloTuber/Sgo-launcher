@@ -15,7 +15,7 @@ import { renderGrades, renderResults, renderAttendance } from './js/views/grades
 import { renderNew, initNewTab } from './js/views/new.js';
 import { renderCalculator, restoreCalcState, clearCalcState } from './js/views/calculator.js';
 import { renderAnalytics } from './js/views/analytics.js';
-import { renderHome, updateHomeLive } from './js/views/home.js';
+import { renderHome, updateHomeLive, setHomeEditMode, isHomeEditMode } from './js/views/home.js';
 import { renderModuleList, resetModuleLayout, bindGridColumns } from './js/views/homeLayout.js';
 
 // --- Безопасный localStorage ---
@@ -416,6 +416,18 @@ function initSettings() {
   const layoutBtn = document.querySelector("#home-layout-btn");
   if (layoutBtn) layoutBtn.addEventListener("click", () => openSettings("home"));
 
+  // Кнопка «Переместить»: режим перетаскивания модулей на главном экране.
+  const editBtn = document.querySelector("#home-edit-btn");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => {
+      const on = !isHomeEditMode();
+      setHomeEditMode(on);
+      editBtn.textContent = on ? "Готово" : "Переместить";
+      editBtn.classList.toggle("is-active", on);
+      if (on) toast("Тяните модули за ручку «⋮⋮»");
+    });
+  }
+
   // Вкладки внутри настроек.
   const settingsTabs = document.querySelector("#settings-tabs");
   if (settingsTabs) {
@@ -437,16 +449,17 @@ function initSettings() {
   const gridColumns = document.querySelector("#home-grid-columns");
   if (gridColumns) {
     bindGridColumns(gridColumns, () => {
+      // Список модулей перерисовываем: при одной колонке ширина не нужна.
+      if (modulesList) renderModuleList(modulesList, rerenderHome);
       rerenderHome();
-      toast("Число колонок изменено");
     });
   }
   const modulesReset = document.querySelector("#home-modules-reset");
   if (modulesReset) {
     modulesReset.addEventListener("click", () => {
       resetModuleLayout(modulesList, rerenderHome);
-      if (gridColumns) gridColumns.value = "3";
-      toast("Раскладка модулей сброшена");
+      if (gridColumns) gridColumns.value = "1";
+      toast("Главный экран возвращён в исходный вид");
     });
   }
 
@@ -1621,6 +1634,15 @@ function init() {
 
   initSettings();
   document.querySelector("#theme-toggle").addEventListener("click", toggleTheme);
+
+  // Ширина окна изменилась — пересобираем сетку главного экрана.
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (state.tab === "home") renderHome();
+    }, 200);
+  });
 
   const markReadButton = document.querySelector("#mark-read");
   if (markReadButton) markReadButton.addEventListener("click", markEverythingRead);

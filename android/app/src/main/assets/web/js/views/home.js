@@ -382,33 +382,89 @@ function summaryCard() {
   let marks = 0;
   let debts = 0;
   let risky = 0;
+  const riskyNames = [];
 
   for (const subject of subjects) {
     for (const mark of subject.marks || []) {
       marks += 1;
       if (mark.value === "." || mark.value === "-") debts += 1;
     }
+    // Средние из СГО весов не учитывают, поэтому риск считаем сами.
     const ownAverage = subjectAverage(subject);
-    if (ownAverage != null && ownAverage < 3.5) risky += 1;
+    if (ownAverage != null && ownAverage < 3.5) {
+      risky += 1;
+      riskyNames.push(subject.name);
+    }
   }
 
-  const chips = [
-    `<span class="chip" title="Средний балл с учётом весов оценок">Средний <b>${formatAverage(grades.average)}</b></span>`,
-    `<span class="chip">Оценок <b>${marks}</b></span>`,
-    `<span class="chip">Предметов <b>${subjects.length}</b></span>`,
+  const tiles = [
+    `<div class="home-summary-item">
+       <span class="home-summary-value">${escapeHtml(formatAverage(grades.average))}</span>
+       <span class="home-summary-label">средний балл</span>
+     </div>`,
+    `<div class="home-summary-item">
+       <span class="home-summary-value">${marks}</span>
+       <span class="home-summary-label">${markWord(marks)}</span>
+     </div>`,
+    `<div class="home-summary-item">
+       <span class="home-summary-value">${subjects.length}</span>
+       <span class="home-summary-label">${subjectWord(subjects.length)}</span>
+     </div>`,
   ];
-  if (debts) chips.push(`<span class="chip chip-warn">Долгов <b>${debts}</b></span>`);
-  if (risky) chips.push(`<span class="chip chip-warn">В зоне риска <b>${risky}</b></span>`);
 
-  const period = grades.term ? ` · ${grades.term}` : "";
+  if (debts) {
+    tiles.push(`<div class="home-summary-item is-warn">
+       <span class="home-summary-value">${debts}</span>
+       <span class="home-summary-label">${debtWord(debts)}</span>
+     </div>`);
+  }
+  if (risky) {
+    tiles.push(`<div class="home-summary-item is-warn">
+       <span class="home-summary-value">${risky}</span>
+       <span class="home-summary-label">предметов в риске</span>
+     </div>`);
+  }
+
+  const period = grades.term ? ` · ${escapeHtml(grades.term)}` : "";
+  const riskNote = risky
+    ? `<div class="home-summary-note">В зоне риска: ${escapeHtml(riskyNames.slice(0, 3).join(", "))}${riskyNames.length > 3 ? " и другие" : ""}.</div>`
+    : "";
 
   return `
     <article class="today-card home-summary-card">
-      <div class="today-card-head"><h3>Сводка</h3>${goButton("analytics", "Аналитика")}</div>
-      <div class="today-summary-chips">${chips.join("")}</div>
-      <div class="today-muted">Данные за период${escapeHtml(period)}.</div>
+      <div class="today-card-head"><h3>Сводка</h3>${goButton("analytics", "Подробнее")}</div>
+      <div class="home-summary">${tiles.join("")}</div>
+      <div class="home-summary-note">Данные за период${period}.</div>
+      ${riskNote}
     </article>
   `;
+}
+
+/** «4 оценки», «1 оценка» — правильное окончание. */
+function markWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "оценка";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "оценки";
+  return "оценок";
+}
+
+/** «18 предметов», «1 предмет» — правильное окончание. */
+function subjectWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "предмет";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "предмета";
+  return "предметов";
+}
+
+/** «2 долга», «1 долг» — правильное окончание. */
+function debtWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "долг";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "долга";
+  return "долгов";
 }
 
 function attentionCard() {
@@ -466,12 +522,40 @@ function attentionCard() {
 
 /**
  * Добавляет в карточку модуля ручку для перетаскивания.
+ * Ручки показываются только в режиме редактирования — в обычном виде
+ * главный экран не должен выглядеть служебным.
  */
 function withDragHandle(html) {
   return String(html || "").replace(
     "<h3>",
     '<h3><span class="home-module-handle" draggable="true" title="Перетащите, чтобы поменять модули местами" aria-label="Перетащить модуль">⋮⋮</span> ',
   );
+}
+
+// Режим редактирования: показываем ручки и подсказку про перетаскивание.
+let editMode = false;
+
+/** Включает/выключает режим редактирования главного экрана. */
+export function setHomeEditMode(on) {
+  editMode = !!on;
+  renderHome();
+}
+
+/** Текущий режим редактирования. */
+export function isHomeEditMode() {
+  return editMode;
+}
+
+/**
+ * Сколько колонок реально помещается на экране.
+ * Пользователь выбирает, сколько колонок хочет, но на узком окне
+ * три колонки читать невозможно — там оставляем одну или две.
+ */
+function effectiveColumns(columns) {
+  const width = window.innerWidth || 1200;
+  if (width < 560) return 1;
+  if (width < 1000) return Math.min(columns, 2);
+  return columns;
 }
 
 /** Реестр модулей главного экрана: id → функция разметки. */
@@ -516,20 +600,25 @@ export function renderHome() {
 
   const layout = getHomeLayout();
   const ids = visibleModules(layout);
-  const columns = getGridColumns(layout);
+  const columns = effectiveColumns(getGridColumns(layout));
   const body = ids
     .map((id) => {
       const render = MODULES[id];
       if (!render) return "";
       const html = render();
       if (!html) return "";
-      const span = getModuleSpan(id, layout);
-      const withHandle = withDragHandle(html);
-      return `<section class="home-module" data-module="${id}" style="--span: ${span}">${withHandle}</section>`;
+      const span = Math.min(getModuleSpan(id, layout), columns);
+      const card = editMode ? withDragHandle(html) : html;
+      return `<section class="home-module" data-module="${id}" style="--span: ${span}">${card}</section>`;
     })
     .join("");
 
-  content.innerHTML = `${freshHtml}<div class="home-grid" style="--home-cols: ${columns}">${body}</div>`;
+  const editHint = editMode
+    ? `<div class="home-edit-hint">Режим перетаскивания: тяните модуль за ручку «⋮⋮», чтобы поменять местами.</div>`
+    : "";
+
+  content.classList.toggle("is-editing", editMode);
+  content.innerHTML = `${freshHtml}${editHint}<div class="home-grid" style="--home-cols: ${columns}">${body}</div>`;
 
   bindHomeGrid(content);
   bindNotesModule(content);
@@ -629,7 +718,8 @@ export function updateHomeLive() {
   if (!card) return;
 
   const wrapper = document.createElement("div");
-  wrapper.innerHTML = withDragHandle(scheduleCard(getScheduleNow()));
+  const fresh = scheduleCard(getScheduleNow());
+  wrapper.innerHTML = editMode ? withDragHandle(fresh) : fresh;
   const next = wrapper.firstElementChild;
   if (next) card.replaceWith(next);
 }

@@ -34,7 +34,7 @@ const DEFAULT_LAYOUT = Object.freeze({
   hidden: [],
   wide: [],
   spans: {},
-  columns: 3,
+  columns: 1,
 });
 
 function readRaw() {
@@ -51,7 +51,7 @@ function sanitize(raw) {
     hidden: [],
     wide: [],
     spans: {},
-    columns: 3,
+    columns: 1,
   };
   if (raw && typeof raw === "object" && raw !== null) {
     if (Array.isArray(raw.order)) layout.order = raw.order.filter((id) => MODULE_IDS.includes(id));
@@ -192,7 +192,7 @@ export function setModuleSpan(id, span) {
 
 /** Сколько колонок в сетке главного экрана (1–3). */
 export function getGridColumns(layout = getHomeLayout()) {
-  return clampSpan(layout.columns || 3);
+  return clampSpan(layout.columns || 1);
 }
 
 /** Задаёт число колонок в сетке главного экрана (1–3). */
