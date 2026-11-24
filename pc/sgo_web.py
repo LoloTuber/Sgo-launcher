@@ -2,6 +2,7 @@
 """Локальный веб-интерфейс для дневника «Сетевой город»."""
 
 import argparse
+import base64
 import json
 import mimetypes
 import os
@@ -1148,6 +1149,75 @@ def clear_details_cache() -> None:
         _details_cache.clear()
 
 
+# --- Картинка главного экрана ---
+HOME_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+
+
+def _home_image_file() -> Path:
+    return core.config_dir() / "home_image.bin"
+
+
+def _home_image_mime_file() -> Path:
+    return core.config_dir() / "home_image.mime"
+
+
+def home_image_info() -> Dict[str, Any]:
+    """Сведения о сохранённой картинке главного экрана."""
+    path = _home_image_file()
+    if not path.is_file():
+        return {"has": False, "mime": "", "updated": "", "size": 0}
+    try:
+        stat = path.stat()
+        updated = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
+        size = stat.st_size
+    except OSError:
+        return {"has": False, "mime": "", "updated": "", "size": 0}
+    mime = "image/jpeg"
+    try:
+        mime = _home_image_mime_file().read_text(encoding="utf-8").strip() or mime
+    except OSError:
+        pass
+    return {"has": True, "mime": mime, "updated": updated, "size": size}
+
+
+def save_home_image(data_url: str) -> Dict[str, Any]:
+    """Сохраняет картинку, пришедшую как data URL."""
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", str(data_url or "").strip(), re.S)
+    if not match:
+        raise ValueError("Не удалось распознать изображение")
+    mime = match.group(1).lower()
+    try:
+        raw = base64.b64decode(re.sub(r"\s+", "", match.group(2)))
+    except Exception:
+        raise ValueError("Не удалось распознать изображение")
+    if not raw:
+        raise ValueError("Файл пустой")
+    if len(raw) > HOME_IMAGE_MAX_BYTES:
+        raise ValueError("Файл слишком большой (максимум 12 МБ)")
+
+    path = _home_image_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, path)
+    try:
+        _home_image_mime_file().write_text(mime, encoding="utf-8")
+    except OSError:
+        pass
+    return home_image_info()
+
+
+def delete_home_image() -> Dict[str, Any]:
+    """Удаляет сохранённую картинку."""
+    for path in (_home_image_file(), _home_image_mime_file()):
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+    return home_image_info()
+
+
 def about_data(state: AppState) -> Dict[str, Any]:
     """Сведения о сборке и путях — для служебного режима в настройках."""
     try:
@@ -1277,6 +1347,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "terms": terms_data(self.state)})
             elif path == "/api/about":
                 self._send_json({"ok": True, **about_data(self.state)})
+            elif path == "/api/home-image/info":
+                self._send_json({"ok": True, **home_image_info()})
+            elif path == "/api/home-image":
+                info = home_image_info()
+                if not info.get("has"):
+                    self._error("Картинка не найдена", 404); return
+                try:
+                    data = _home_image_file().read_bytes()
+                except OSError:
+                    self._error("Картинка не найдена", 404); return
+                self._send_bytes(data, str(info.get("mime") or "image/jpeg"))
             elif path == "/api/ping":
                 self._send_json({"ok": True, "time": datetime.now().isoformat(timespec="seconds")})
             elif path == "/api/assignment/preload":
@@ -1303,6 +1384,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 traceback.print_exc(); self._error(str(exc))
 
     def do_HEAD(self) -> None: self.do_GET()
+
+    def do_DELETE(self) -> None:
+        path = self._normalize_path(self.path)
+        self.log_message("DELETE %s", path)
+        if path == "/api/home-image":
+            self._send_json({"ok": True, **delete_home_image()})
+            return
+        self._error(f"Неизвестный запрос: DELETE {path}", 404)
 
     @staticmethod
     def _normalize_path(raw: str) -> str:
@@ -1421,6 +1510,19 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/check_auth":
             self._send_json({"ok": True, "authenticated": self.state.client is not None,
                              "school": str(self.state.config.get("school_id") or "")})
+            return
+        if path == "/api/home-image":
+            try:
+                payload = self._read_payload()
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            try:
+                info = save_home_image(str(payload.get("data") or ""))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            self._send_json({"ok": True, **info})
             return
 
         self._read_body_silent()

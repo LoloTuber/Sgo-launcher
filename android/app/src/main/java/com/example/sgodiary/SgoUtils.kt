@@ -19,6 +19,9 @@ internal const val FORCE_DIARY_COOLDOWN = 60 * 1000L
 /** Сколько живёт кэш границ учебных периодов (мс). */
 internal const val TERM_PERIODS_CACHE_TTL = 30 * 60 * 1000L
 
+/** Максимальный размер картинки главного экрана (байт). */
+internal const val HOME_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+
 /** Версия приложения: показывается в служебном режиме. */
 internal const val APP_VERSION = "1.3"
 internal const val APP_BUILD = "2026-11-19"

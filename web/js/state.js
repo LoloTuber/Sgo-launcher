@@ -10,7 +10,7 @@ export const state = {
   resultsPromise: null,
   diaryPromise: null,
   schedulePromise: null,
-  tab: "today",
+  tab: "home",
   authenticated: false,
   currentWeek: null,
   scheduleWeek: null,

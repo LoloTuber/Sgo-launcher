@@ -1,10 +1,16 @@
 package com.example.sgodiary
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -64,6 +70,28 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
             if (!relogin()) throw e
             block()
         }
+    }
+
+    // --- Картинка главного экрана ---
+    private fun homeImageFile(): File = File(context.filesDir, "home_image.bin")
+
+    private fun homeImageMimeFile(): File = File(context.filesDir, "home_image.mime")
+
+    private fun homeImageMime(): String = try {
+        homeImageMimeFile().readText().trim().ifEmpty { "image/jpeg" }
+    } catch (e: Exception) {
+        "image/jpeg"
+    }
+
+    private fun homeImageInfo(): JSONObject {
+        val file = homeImageFile()
+        if (!file.exists()) {
+            return JSONObject().put("has", false).put("mime", "").put("updated", "").put("size", 0)
+        }
+        val updated = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+            .format(Date(file.lastModified()))
+        return JSONObject().put("has", true).put("mime", homeImageMime())
+            .put("updated", updated).put("size", file.length())
     }
 
     override fun serve(session: IHTTPSession): Response {
@@ -131,6 +159,81 @@ class SgoServer(private val context: Context) : NanoHTTPD(8080) {
                 } catch (e: Exception) {
                     return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                         "{\"ok\":false, \"error\":\"Ошибка сервера: ${e.message}\"}")
+                }
+            }
+
+            // --- Картинка главного экрана: файл в папке приложения ---
+            if (uri == "/api/home-image/info") {
+                val info = homeImageInfo()
+                info.put("ok", true)
+                return newFixedLengthResponse(Response.Status.OK, "application/json", info.toString())
+            }
+            if (uri == "/api/home-image") {
+                when (method) {
+                    Method.GET -> {
+                        val file = homeImageFile()
+                        if (!file.exists()) {
+                            return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json",
+                                "{\"ok\":false, \"error\":\"Картинка не найдена\"}")
+                        }
+                        val bytes = file.readBytes()
+                        return newFixedLengthResponse(
+                            Response.Status.OK, homeImageMime(),
+                            ByteArrayInputStream(bytes), bytes.size.toLong())
+                    }
+                    Method.POST -> {
+                        try {
+                            val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
+                            if (contentLength <= 0 || contentLength > HOME_IMAGE_MAX_BYTES * 2) {
+                                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                                    "{\"ok\":false, \"error\":\"Файл слишком большой\"}")
+                            }
+                            val buffer = ByteArray(contentLength)
+                            var readTotal = 0
+                            while (readTotal < contentLength) {
+                                val n = session.inputStream.read(buffer, readTotal, contentLength - readTotal)
+                                if (n <= 0) break
+                                readTotal += n
+                            }
+                            val json = JSONObject(String(buffer, 0, readTotal, Charsets.UTF_8))
+                            val dataUrl = json.optString("data", "")
+                            val match = Regex("^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$",
+                                RegexOption.DOT_MATCHES_ALL).find(dataUrl)
+                            if (match == null) {
+                                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                                    "{\"ok\":false, \"error\":\"Не удалось распознать изображение\"}")
+                            }
+                            val mime = match.groupValues[1].lowercase()
+                            val bytes = Base64.decode(
+                                match.groupValues[2].replace(Regex("\\s+"), ""), Base64.DEFAULT)
+                            if (bytes.isEmpty() || bytes.size > HOME_IMAGE_MAX_BYTES) {
+                                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                                    "{\"ok\":false, \"error\":\"Файл слишком большой\"}")
+                            }
+                            homeImageFile().writeBytes(bytes)
+                            homeImageMimeFile().writeText(mime)
+                            val info = homeImageInfo()
+                            info.put("ok", true)
+                            return newFixedLengthResponse(Response.Status.OK, "application/json", info.toString())
+                        } catch (e: Exception) {
+                            Log.w("SGO_SERVER", "Не удалось сохранить картинку", e)
+                            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                                JSONObject().put("ok", false)
+                                    .put("error", e.message ?: "Ошибка сохранения").toString())
+                        }
+                    }
+                    Method.DELETE -> {
+                        try {
+                            homeImageFile().delete()
+                            homeImageMimeFile().delete()
+                        } catch (e: Exception) {
+                            Log.w("SGO_SERVER", "Не удалось удалить картинку", e)
+                        }
+                        val info = homeImageInfo()
+                        info.put("ok", true)
+                        return newFixedLengthResponse(Response.Status.OK, "application/json", info.toString())
+                    }
+                    else -> Unit
                 }
             }
 

@@ -40,7 +40,7 @@
 </header>
 
 <nav class="tabs" id="tabs" role="tablist">
-  <button class="tab is-active" type="button" data-tab="today" role="tab">Сегодня</button>
+  <button class="tab is-active" type="button" data-tab="home" role="tab">Главная</button>
   <button class="tab" type="button" data-tab="new" role="tab">Новое</button>
   <button class="tab" type="button" data-tab="homework" role="tab">ДЗ на завтра</button>
   <button class="tab" type="button" data-tab="diary" role="tab">Дневник</button>
@@ -55,12 +55,15 @@
 <main class="content">
   <div id="banner" class="banner" hidden></div>
 
-  <section class="panel is-active" data-panel="today">
+  <section class="panel is-active" data-panel="home">
     <div class="panel-head">
-      <div><h2>Сегодня</h2><p class="subtle" id="today-date">…</p></div>
-      <button id="today-refresh" class="btn btn-outline" type="button">Обновить</button>
+      <div><h2>Главная</h2><p class="subtle" id="home-date">…</p></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="home-refresh" class="btn btn-outline" type="button">Обновить</button>
+        <button id="home-layout-btn" class="btn btn-outline" type="button">Настроить модули</button>
+      </div>
     </div>
-    <div id="today-content" class="today-list">
+    <div id="home-content" class="today-list">
       <div class="skeleton"></div>
       <div class="skeleton"></div>
     </div>
@@ -171,6 +174,146 @@
     </div>
     <div id="calc-content" class="list"></div>
   </section>
+  <section class="panel" data-panel="settings">
+    <div class="panel-head">
+      <div><h2>Настройки</h2><p class="subtle" id="settings-sub">Все настройки приложения</p></div>
+      <button id="close-settings" class="btn" type="button">Готово</button>
+    </div>
+
+    <nav class="tabs settings-tabs" id="settings-tabs" role="tablist">
+      <button class="tab is-active" type="button" data-settings-tab="home" role="tab">Главная</button>
+      <button class="tab" type="button" data-settings-tab="interface" role="tab">Интерфейс</button>
+      <button class="tab" type="button" data-settings-tab="background" role="tab">Фон</button>
+      <button class="tab" type="button" data-settings-tab="data" role="tab">Данные</button>
+      <button class="tab" type="button" data-settings-tab="service" role="tab">Служебное</button>
+    </nav>
+
+    <div class="settings-panes">
+      <!-- Главная: модули главного экрана -->
+      <div class="settings-pane is-active" data-settings-pane="home">
+        <div class="settings-block">
+          <div class="settings-block-title">🧩 Модули главного экрана</div>
+          <p class="subtle">Модули можно перетаскивать (за ручку «⋮⋮» — прямо на главном экране или здесь), скрывать лишние и задавать им ширину в колонках.</p>
+          <div class="settings-row">
+            <label for="home-grid-columns">Колонок на экране</label>
+            <select id="home-grid-columns" class="term-select">
+              <option value="1">1 колонка</option>
+              <option value="2">2 колонки</option>
+              <option value="3">3 колонки</option>
+            </select>
+          </div>
+          <div class="settings-list" id="home-modules-list"></div>
+          <div class="settings-actions">
+            <button id="home-modules-reset" class="btn-outline" type="button">Вернуть порядок по умолчанию</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Интерфейс -->
+      <div class="settings-pane" data-settings-pane="interface">
+        <div class="settings-block">
+          <div class="settings-block-title">📌 Верхняя панель</div>
+          <p class="subtle">Какие разделы показывать в верхней панели.</p>
+          <div class="settings-list">
+            <label><input type="checkbox" class="tab-toggle" value="home" checked> Главная</label>
+            <label><input type="checkbox" class="tab-toggle" value="new" checked> Новое</label>
+            <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
+            <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
+            <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
+            <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
+            <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
+            <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
+            <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
+            <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-title">🎨 Вид</div>
+          <label class="settings-check"><input type="checkbox" id="setting-compact"> Компактные карточки</label>
+          <label class="settings-check"><input type="checkbox" id="setting-hide-empty"> Скрывать пустые уроки</label>
+          <label class="settings-check"><input type="checkbox" id="setting-today-only"> В расписании только сегодня</label>
+          <div class="settings-row">
+            <label for="setting-font-size">Размер шрифта</label>
+            <select id="setting-font-size" class="term-select">
+              <option value="normal">Обычный</option>
+              <option value="large">Крупный</option>
+              <option value="xlarge">Очень крупный</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label for="color-theme-select">Цветовая тема</label>
+            <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;">
+              <option value="green">🌿 Зелёная (по умолчанию)</option>
+              <option value="blue">🔵 Синяя</option>
+              <option value="pink">🌸 Розовая</option>
+              <option value="purple">🟣 Фиолетовая</option>
+              <option value="orange">🟠 Оранжевая</option>
+              <option value="red">🔴 Красная</option>
+              <option value="teal">🌊 Бирюзовая</option>
+              <option value="cyan">💧 Голубая</option>
+              <option value="slate">⚫ Графитовая</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Фон -->
+      <div class="settings-pane" data-settings-pane="background">
+        <div class="settings-block">
+          <div class="settings-block-title">🔔 Фоновый режим</div>
+          <p class="subtle">Приложение проверяет дневник в фоне и присылает уведомления о новых оценках и заданиях.</p>
+          <label class="settings-check"><input type="checkbox" id="setting-background"> Проверять дневник в фоне</label>
+          <label class="settings-check"><input type="checkbox" id="setting-notify-marks"> Уведомлять о новых оценках</label>
+          <label class="settings-check"><input type="checkbox" id="setting-notify-homework"> Уведомлять о новом домашнем задании</label>
+          <div class="settings-row">
+            <label for="setting-interval">Интервал проверки</label>
+            <select id="setting-interval" class="term-select">
+              <option value="5">Каждые 5 минут</option>
+              <option value="10">Каждые 10 минут</option>
+              <option value="15">Каждые 15 минут</option>
+              <option value="30">Каждые 30 минут</option>
+              <option value="60">Каждый час</option>
+            </select>
+          </div>
+          <label class="settings-check" id="setting-autostart-row"><input type="checkbox" id="setting-autostart"> Запускать вместе с Windows</label>
+          <p class="subtle" id="setting-autostart-hint" hidden>Автозапуск доступен только в версии для компьютера.</p>
+        </div>
+      </div>
+
+      <!-- Данные -->
+      <div class="settings-pane" data-settings-pane="data">
+        <div class="settings-block">
+          <div class="settings-block-title">💾 Сохранение данных</div>
+          <label class="settings-check"><input type="checkbox" id="setting-cache"> Хранить данные для офлайна</label>
+          <p class="subtle">Нужно, чтобы дневник, расписание и калькулятор открывались без интернета.</p>
+          <div class="settings-actions">
+            <button id="clear-cache-btn" class="btn-outline" type="button">Очистить сохранённые данные</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Служебное -->
+      <div class="settings-pane" data-settings-pane="service">
+        <div class="settings-block">
+          <div class="settings-block-title">🛠 Служебное</div>
+          <label class="settings-check"><input type="checkbox" id="setting-developer"> Служебный режим</label>
+          <p class="subtle">Показывать технические подробности ошибок, ID школы при входе и сведения о сборке.</p>
+          <div class="dev-only">
+            <p class="subtle" id="about-info">Сведения о сборке загружаются…</p>
+            <div class="settings-actions">
+              <button id="copy-about-btn" class="btn-outline" type="button">Скопировать сведения</button>
+              <button id="clear-changes-btn" class="btn-outline" type="button">Сбросить отметки «новое»</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-footer">
+      <button id="logout-btn" class="btn" style="background: var(--red); border-color: var(--red);">Выйти</button>
+    </div>
+  </section>
 </main>
 
 <footer class="footer">
@@ -179,105 +322,6 @@
   <span>Только чтение · данные из «Сетевого города»</span>
 </footer>
 
-<!-- Модальное окно настроек -->
-<div id="settings-modal" class="modal" hidden>
-  <div class="modal-content settings-content">
-    <h3>Настройки</h3>
-
-    <div class="settings-block">
-      <div class="settings-block-title">📌 Верхняя панель</div>
-      <p class="subtle">Какие разделы показывать в верхней панели.</p>
-      <div class="settings-list">
-        <label><input type="checkbox" class="tab-toggle" value="today" checked> Сегодня</label>
-        <label><input type="checkbox" class="tab-toggle" value="new" checked> Новое</label>
-        <label><input type="checkbox" class="tab-toggle" value="homework" checked> ДЗ на завтра</label>
-        <label><input type="checkbox" class="tab-toggle" value="diary" checked> Дневник</label>
-        <label><input type="checkbox" class="tab-toggle" value="schedule" checked> Расписание</label>
-        <label><input type="checkbox" class="tab-toggle" value="grades" checked> Успеваемость</label>
-        <label><input type="checkbox" class="tab-toggle" value="analytics" checked> Аналитика</label>
-        <label><input type="checkbox" class="tab-toggle" value="results" checked> Итоги</label>
-        <label><input type="checkbox" class="tab-toggle" value="attendance" checked> Посещаемость</label>
-        <label><input type="checkbox" class="tab-toggle" value="calc" checked> Калькулятор</label>
-      </div>
-    </div>
-
-    <div class="settings-block">
-      <div class="settings-block-title">🎨 Интерфейс и тема</div>
-      <label class="settings-check"><input type="checkbox" id="setting-compact"> Компактные карточки</label>
-      <label class="settings-check"><input type="checkbox" id="setting-hide-empty"> Скрывать пустые уроки</label>
-      <label class="settings-check"><input type="checkbox" id="setting-today-only"> В расписании только сегодня</label>
-      <div class="settings-row">
-        <label for="setting-font-size">Размер шрифта</label>
-        <select id="setting-font-size" class="term-select">
-          <option value="normal">Обычный</option>
-          <option value="large">Крупный</option>
-          <option value="xlarge">Очень крупный</option>
-        </select>
-      </div>
-      <div class="settings-row">
-        <label for="color-theme-select">Цветовая тема</label>
-        <select id="color-theme-select" class="term-select" style="max-width: 100%; width: 100%;">
-          <option value="green">🌿 Зелёная (по умолчанию)</option>
-          <option value="blue">🔵 Синяя</option>
-          <option value="pink">🌸 Розовая</option>
-          <option value="purple">🟣 Фиолетовая</option>
-          <option value="orange">🟠 Оранжевая</option>
-          <option value="red">🔴 Красная</option>
-          <option value="teal">🌊 Бирюзовая</option>
-          <option value="cyan">💧 Голубая</option>
-          <option value="slate">⚫ Графитовая</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="settings-block">
-      <div class="settings-block-title">🔔 Фоновый режим</div>
-      <p class="subtle">Приложение проверяет дневник в фоне и присылает уведомления о новых оценках и заданиях.</p>
-      <label class="settings-check"><input type="checkbox" id="setting-background"> Проверять дневник в фоне</label>
-      <label class="settings-check"><input type="checkbox" id="setting-notify-marks"> Уведомлять о новых оценках</label>
-      <label class="settings-check"><input type="checkbox" id="setting-notify-homework"> Уведомлять о новом домашнем задании</label>
-      <div class="settings-row">
-        <label for="setting-interval">Интервал проверки</label>
-        <select id="setting-interval" class="term-select">
-          <option value="5">Каждые 5 минут</option>
-          <option value="10">Каждые 10 минут</option>
-          <option value="15">Каждые 15 минут</option>
-          <option value="30">Каждые 30 минут</option>
-          <option value="60">Каждый час</option>
-        </select>
-      </div>
-      <label class="settings-check" id="setting-autostart-row"><input type="checkbox" id="setting-autostart"> Запускать вместе с Windows</label>
-      <p class="subtle" id="setting-autostart-hint" hidden>Автозапуск доступен только в версии для компьютера.</p>
-    </div>
-
-    <div class="settings-block">
-      <div class="settings-block-title">💾 Сохранение данных</div>
-      <label class="settings-check"><input type="checkbox" id="setting-cache"> Хранить данные для офлайна</label>
-      <p class="subtle">Нужно, чтобы дневник, расписание и калькулятор открывались без интернета.</p>
-    </div>
-
-    <div class="settings-block">
-      <div class="settings-block-title">🛠 Служебное</div>
-      <label class="settings-check"><input type="checkbox" id="setting-developer"> Служебный режим</label>
-      <p class="subtle">Показывать технические подробности ошибок, ID школы при входе и сведения о сборке.</p>
-      <div class="dev-only">
-        <p class="subtle" id="about-info">Сведения о сборке загружаются…</p>
-        <div class="settings-actions">
-          <button id="copy-about-btn" class="btn-outline" type="button">Скопировать сведения</button>
-          <button id="clear-cache-btn" class="btn-outline" type="button">Очистить сохранённые данные</button>
-          <button id="clear-changes-btn" class="btn-outline" type="button">Сбросить отметки «новое»</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-footer">
-      <button id="logout-btn" class="btn" style="background: var(--red); border-color: var(--red);">Выйти</button>
-      <button id="close-settings" class="btn">Готово</button>
-    </div>
-  </div>
-</div>
-
-<!-- МОДАЛЬНОЕ ОКНО ВХОДА -->
 <div id="login-overlay" class="modal" hidden>
   <div class="modal-content" style="max-width: 340px;">
     <div style="text-align: center; margin-bottom: 20px;">

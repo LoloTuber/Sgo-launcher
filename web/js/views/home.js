@@ -11,10 +11,16 @@ import {
   isNewMark, isNewHomework, isDayChanged, markAllRead,
   newMarksCount, newHomeworkCount, changedDaysCount,
 } from '../changes.js';
+import { getHomeLayout, visibleModules, getGridColumns, getModuleSpan, setModuleOrder } from '../modules.js';
+import { renderNotesModule, bindNotesModule } from './notes.js';
+import { renderImageModule, bindImageModule, loadImageInfo, ensureImageInfo, getImageInfo } from './image.js';
 
 /**
- * Экран «Сегодня»: расписание на сейчас, домашнее задание,
- * последние оценки и то, что требует внимания.
+ * Главный экран: собирается из модулей (расписание, завтра, домашнее
+ * задание, оценки, сводка, внимание, заметки, изображение).
+ *
+ * Состав и порядок модулей задаёт пользователь в настройках
+ * (вкладка «Главная»), здесь мы только рендерим их.
  */
 
 function navigate(tab) {
@@ -45,6 +51,14 @@ function lessonWord(count) {
   if (mod10 === 1 && mod100 !== 11) return "урок";
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "урока";
   return "уроков";
+}
+
+function taskWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "задание";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "задания";
+  return "заданий";
 }
 
 function scheduleActions(date) {
@@ -161,6 +175,70 @@ function scheduleCard(info) {
   `;
 }
 
+/** Уроки завтрашнего дня: из текущей или следующей недели. */
+function tomorrowScheduleCard() {
+  const tomorrow = addDaysIso(localIsoDate(), 1);
+  const weeks = [state.schedule, state.nextSchedule];
+  let day = null;
+  for (const week of weeks) {
+    if (!week || !Array.isArray(week.days)) continue;
+    day = week.days.find((item) => item.date === tomorrow) || null;
+    if (day) break;
+  }
+
+  const actions = `<div class="today-card-actions">
+    <button class="btn-edit-note" type="button" data-edit-note="${escapeHtml(tomorrow)}" title="Изменить расписание">✏️</button>
+    ${goButton("schedule", "Вся неделя")}
+  </div>`;
+
+  if (!day) {
+    const next = getNextSchoolDay(localIsoDate());
+    return `
+      <article class="today-card home-tomorrow-card">
+        <div class="today-card-head"><h3>Расписание на завтра</h3>${actions}</div>
+        <div class="today-muted">
+          ${next
+            ? `Завтра уроков нет. Ближайший учебный день — ${escapeHtml(next.weekday.toLowerCase())}, ${escapeHtml(shortDate(next.date))}.`
+            : "Расписание на завтра пока не загружено."}
+        </div>
+      </article>
+    `;
+  }
+
+  const lessons = (day.lessons || [])
+    .filter((lesson) => String(lesson.subject || "").trim())
+    .filter((lesson) => !isImportantTalkSubject(lesson.subject))
+    .sort((a, b) => Number(a.number) - Number(b.number));
+
+  const body = lessons.length
+    ? `<div class="today-lessons">${lessons.map((lesson) => `
+        <div class="today-lesson">
+          <span class="today-lesson-num">${lesson.number}</span>
+          <span class="today-lesson-subject">${escapeHtml(lesson.subject || "—")}</span>
+          <span class="today-lesson-time">${escapeHtml(lessonTime(lesson))}</span>
+        </div>`).join("")}</div>`
+    : `<div class="today-muted">Завтра уроков нет.</div>`;
+
+  return `
+    <article class="today-card home-tomorrow-card ${isDayChanged(tomorrow) ? "is-changed" : ""}">
+      <div class="today-card-head">
+        <h3>Расписание на завтра</h3>
+        ${actions}
+      </div>
+      <div class="today-now-meta">${escapeHtml(day.weekday || "")}, ${escapeHtml(shortDate(tomorrow))} · ${lessons.length} ${lessonWord(lessons.length)}</div>
+      ${body}
+    </article>
+  `;
+}
+
+/** Время урока: «08:00–08:40» либо только начало. */
+function lessonTime(lesson) {
+  const start = String(lesson.start || "").trim();
+  const end = String(lesson.end || "").trim();
+  if (start && end) return `${start}–${end}`;
+  return start || end || "";
+}
+
 function todayHomework() {
   if (!state.diary || !Array.isArray(state.diary.days)) return null;
   const today = localIsoDate();
@@ -253,14 +331,6 @@ function homeworkCard() {
   `;
 }
 
-function taskWord(count) {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return "задание";
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "задания";
-  return "заданий";
-}
-
 function latestGradesCard() {
   const rows = [];
   for (const subject of (state.grades && state.grades.subjects) || []) {
@@ -301,6 +371,42 @@ function latestGradesCard() {
           `;
         }).join("")}
       </div>
+    </article>
+  `;
+}
+
+/** Сводка: средний балл, сколько оценок, долги, предметы в риске. */
+function summaryCard() {
+  const grades = state.grades || {};
+  const subjects = grades.subjects || [];
+  let marks = 0;
+  let debts = 0;
+  let risky = 0;
+
+  for (const subject of subjects) {
+    for (const mark of subject.marks || []) {
+      marks += 1;
+      if (mark.value === "." || mark.value === "-") debts += 1;
+    }
+    const ownAverage = subjectAverage(subject);
+    if (ownAverage != null && ownAverage < 3.5) risky += 1;
+  }
+
+  const chips = [
+    `<span class="chip" title="Средний балл с учётом весов оценок">Средний <b>${formatAverage(grades.average)}</b></span>`,
+    `<span class="chip">Оценок <b>${marks}</b></span>`,
+    `<span class="chip">Предметов <b>${subjects.length}</b></span>`,
+  ];
+  if (debts) chips.push(`<span class="chip chip-warn">Долгов <b>${debts}</b></span>`);
+  if (risky) chips.push(`<span class="chip chip-warn">В зоне риска <b>${risky}</b></span>`);
+
+  const period = grades.term ? ` · ${grades.term}` : "";
+
+  return `
+    <article class="today-card home-summary-card">
+      <div class="today-card-head"><h3>Сводка</h3>${goButton("analytics", "Аналитика")}</div>
+      <div class="today-summary-chips">${chips.join("")}</div>
+      <div class="today-muted">Данные за период${escapeHtml(period)}.</div>
     </article>
   `;
 }
@@ -358,13 +464,42 @@ function attentionCard() {
   `;
 }
 
-export function renderToday() {
-  const content = document.querySelector("#today-content");
+/**
+ * Добавляет в карточку модуля ручку для перетаскивания.
+ */
+function withDragHandle(html) {
+  return String(html || "").replace(
+    "<h3>",
+    '<h3><span class="home-module-handle" draggable="true" title="Перетащите, чтобы поменять модули местами" aria-label="Перетащить модуль">⋮⋮</span> ',
+  );
+}
+
+/** Реестр модулей главного экрана: id → функция разметки. */
+const MODULES = {
+  schedule: () => scheduleCard(getScheduleNow()),
+  tomorrow: tomorrowScheduleCard,
+  homework: homeworkCard,
+  grades: latestGradesCard,
+  summary: summaryCard,
+  attention: attentionCard,
+  notes: renderNotesModule,
+  image: renderImageModule,
+};
+
+export function renderHome() {
+  const content = document.querySelector("#home-content");
   if (!content) return;
 
+  // Сведения о сохранённой картинке загружаем один раз — иначе модуль
+  // «Изображение» не знает, что картинка уже есть.
+  if (!getImageInfo()) {
+    ensureImageInfo().then(() => {
+      if (state.tab === "home") renderHome();
+    });
+  }
+
   const now = new Date();
-  setTodayDate(now);
-  const info = getScheduleNow(now);
+  setHomeDate(now);
   const freshMarks = newMarksCount();
   const freshHomework = newHomeworkCount();
   const freshSchedule = changedDaysCount();
@@ -379,26 +514,33 @@ export function renderToday() {
       </div>`
     : "";
 
-  content.innerHTML = `
-    ${freshHtml}
-    ${scheduleCard(info)}
-    ${homeworkCard()}
-    ${latestGradesCard()}
-    ${attentionCard()}
-    <div class="today-actions">
-      ${goButton("diary", "Дневник")}
-      ${goButton("schedule", "Расписание")}
-      ${goButton("grades", "Успеваемость")}
-      ${goButton("calc", "Калькулятор")}
-    </div>
-  `;
+  const layout = getHomeLayout();
+  const ids = visibleModules(layout);
+  const columns = getGridColumns(layout);
+  const body = ids
+    .map((id) => {
+      const render = MODULES[id];
+      if (!render) return "";
+      const html = render();
+      if (!html) return "";
+      const span = getModuleSpan(id, layout);
+      const withHandle = withDragHandle(html);
+      return `<section class="home-module" data-module="${id}" style="--span: ${span}">${withHandle}</section>`;
+    })
+    .join("");
+
+  content.innerHTML = `${freshHtml}<div class="home-grid" style="--home-cols: ${columns}">${body}</div>`;
+
+  bindHomeGrid(content);
+  bindNotesModule(content);
+  bindImageModule(content, () => renderHome());
 
   // Делегирование: карточка расписания может обновляться отдельно от экрана.
   content.onclick = (event) => {
     const readAll = event.target.closest("[data-action='mark-read']");
     if (readAll && content.contains(readAll)) {
       markAllRead();
-      renderToday();
+      renderHome();
       toast("Отмечено прочитанным");
       window.dispatchEvent(new CustomEvent("sgo:changes-read"));
       return;
@@ -406,7 +548,7 @@ export function renderToday() {
 
     const editNote = event.target.closest("[data-edit-note]");
     if (editNote && content.contains(editNote)) {
-      if (editScheduleNote(editNote.dataset.editNote)) renderToday();
+      if (editScheduleNote(editNote.dataset.editNote)) renderHome();
       return;
     }
 
@@ -415,8 +557,62 @@ export function renderToday() {
   };
 }
 
-function setTodayDate(now) {
-  const dateEl = document.querySelector("#today-date");
+/**
+ * Перетаскивание модулей прямо на главном экране.
+ *
+ * Тянуть можно за ручку «⋮⋮» в шапке модуля — так текст в заметках
+ * по-прежнему выделяется мышью, а кнопки внутри карточек работают.
+ */
+function bindHomeGrid(container) {
+  const grid = container.querySelector(".home-grid");
+  if (!grid) return;
+
+  let dragId = null;
+
+  grid.querySelectorAll(".home-module").forEach((section) => {
+    section.addEventListener("dragstart", (event) => {
+      dragId = section.dataset.module;
+      section.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        try { event.dataTransfer.setData("text/plain", dragId); } catch (_) { /* ignore */ }
+      }
+    });
+
+    section.addEventListener("dragend", () => {
+      section.classList.remove("is-dragging");
+      grid.querySelectorAll(".home-module.is-over").forEach((item) => item.classList.remove("is-over"));
+      dragId = null;
+    });
+
+    section.addEventListener("dragover", (event) => {
+      if (!dragId || dragId === section.dataset.module) return;
+      event.preventDefault();
+      section.classList.add("is-over");
+    });
+
+    section.addEventListener("dragleave", () => section.classList.remove("is-over"));
+
+    section.addEventListener("drop", (event) => {
+      event.preventDefault();
+      section.classList.remove("is-over");
+      const source = dragId || (event.dataTransfer ? event.dataTransfer.getData("text/plain") : "");
+      const target = section.dataset.module;
+      if (!source || !target || source === target) return;
+
+      const order = getHomeLayout().order.slice();
+      const from = order.indexOf(source);
+      const to = order.indexOf(target);
+      if (from < 0 || to < 0) return;
+      order.splice(from, 1);
+      order.splice(to, 0, source);
+      setModuleOrder(order);
+      renderHome();
+    });
+  });
+}
+
+function setHomeDate(now) {  const dateEl = document.querySelector("#home-date");
   if (!dateEl) return;
   dateEl.textContent = capitalize(now.toLocaleDateString("ru-RU", {
     weekday: "long", day: "numeric", month: "long",
@@ -424,16 +620,21 @@ function setTodayDate(now) {
 }
 
 /** Обновляет только карточку расписания — не сбрасывает раскрытые блоки ДЗ. */
-export function updateTodayLive() {
-  const content = document.querySelector("#today-content");
+export function updateHomeLive() {
+  const content = document.querySelector("#home-content");
   if (!content) return;
 
-  setTodayDate(new Date());
-  const card = content.querySelector(".today-schedule-card");
+  setHomeDate(new Date());
+  const card = content.querySelector('[data-module="schedule"] .today-schedule-card');
   if (!card) return;
 
   const wrapper = document.createElement("div");
-  wrapper.innerHTML = scheduleCard(getScheduleNow());
+  wrapper.innerHTML = withDragHandle(scheduleCard(getScheduleNow()));
   const next = wrapper.firstElementChild;
   if (next) card.replaceWith(next);
+}
+
+/** Подгружает сведения о сохранённой картинке (для модуля «Изображение»). */
+export async function refreshImageInfo() {
+  await loadImageInfo();
 }

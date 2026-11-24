@@ -15,7 +15,8 @@ import { renderGrades, renderResults, renderAttendance } from './js/views/grades
 import { renderNew, initNewTab } from './js/views/new.js';
 import { renderCalculator, restoreCalcState, clearCalcState } from './js/views/calculator.js';
 import { renderAnalytics } from './js/views/analytics.js';
-import { renderToday, updateTodayLive } from './js/views/today.js';
+import { renderHome, updateHomeLive } from './js/views/home.js';
+import { renderModuleList, resetModuleLayout, bindGridColumns } from './js/views/homeLayout.js';
 
 // --- Безопасный localStorage ---
 // В приватном режиме / при жёстких настройках браузера доступ может бросать
@@ -267,7 +268,7 @@ async function startApp(options = {}) {
   }
 
   selectTab(state.tab);
-  renderToday();
+  renderHome();
 
   if (!(gradesOk || resultsOk) || !(diaryOk || scheduleOk)) {
     toast("Часть данных не загрузилась");
@@ -278,7 +279,7 @@ async function startApp(options = {}) {
 function markEverythingRead() {
   markAllRead();
   window.dispatchEvent(new CustomEvent("sgo:changes-read"));
-  renderToday();
+  renderHome();
   toast("Отмечено прочитанным");
 }
 
@@ -403,14 +404,51 @@ async function notifyAutostart(enabled) {
   }
 }
 
-// --- Настройки (скрытие вкладок + цветовая тема) ---
+// --- Настройки (отдельная панель с вкладками + цветовая тема) ---
 function initSettings() {
-  const modal = document.querySelector("#settings-modal");
   const btn = document.querySelector("#settings-btn");
   const closeBtn = document.querySelector("#close-settings");
 
-  btn.addEventListener("click", () => { modal.hidden = false; });
-  closeBtn.addEventListener("click", () => { modal.hidden = true; });
+  btn.addEventListener("click", () => openSettings());
+  closeBtn.addEventListener("click", () => closeSettings());
+
+  // Кнопка «Настроить модули» на главном экране.
+  const layoutBtn = document.querySelector("#home-layout-btn");
+  if (layoutBtn) layoutBtn.addEventListener("click", () => openSettings("home"));
+
+  // Вкладки внутри настроек.
+  const settingsTabs = document.querySelector("#settings-tabs");
+  if (settingsTabs) {
+    settingsTabs.addEventListener("click", (event) => {
+      const tab = event.target.closest(".tab");
+      if (!tab) return;
+      selectSettingsTab(tab.dataset.settingsTab);
+    });
+  }
+
+  // Модули главного экрана: видимость, порядок и ширина.
+  const modulesList = document.querySelector("#home-modules-list");
+  const rerenderHome = () => {
+    if (state.tab === "home") renderHome();
+  };
+  if (modulesList) {
+    renderModuleList(modulesList, rerenderHome);
+  }
+  const gridColumns = document.querySelector("#home-grid-columns");
+  if (gridColumns) {
+    bindGridColumns(gridColumns, () => {
+      rerenderHome();
+      toast("Число колонок изменено");
+    });
+  }
+  const modulesReset = document.querySelector("#home-modules-reset");
+  if (modulesReset) {
+    modulesReset.addEventListener("click", () => {
+      resetModuleLayout(modulesList, rerenderHome);
+      if (gridColumns) gridColumns.value = "3";
+      toast("Раскладка модулей сброшена");
+    });
+  }
 
   // --- ВЫБОР ЦВЕТОВОЙ ТЕМЫ ---
   const colorSelect = document.querySelector("#color-theme-select");
@@ -475,7 +513,7 @@ function initSettings() {
         clearChanges();
         lsRemove("sgo.term");
 
-        modal.hidden = true;
+        closeSettings();
         document.querySelector("#login-pass").value = "";
         showLogin();
       } catch (e) {
@@ -542,7 +580,7 @@ function initSettings() {
     } else if (name === "developerMode") {
       loadAboutInfo();
     }
-    if (state.tab === "today") renderToday();
+    if (state.tab === "home") renderHome();
   });
 
   // Автозапуск есть только в версии для компьютера.
@@ -680,7 +718,7 @@ function renderQuickData(data, fromCache = false) {
   renderHeader(data.student);
   renderHomework(data.homework);
   renderResults(data.results);
-  if (state.tab === "today") renderToday();
+  if (state.tab === "home") renderHome();
   const updated = document.querySelector("#updated");
   if (updated) {
     updated.textContent = fromCache
@@ -697,7 +735,7 @@ function renderGradesData(data) {
   renderAttendance(data);
   renderAnalytics(data);
   renderCalculator(data);
-  if (state.tab === "today") renderToday();
+  if (state.tab === "home") renderHome();
 }
 
 let quickRequestId = 0;
@@ -835,7 +873,7 @@ function loadDiary(weekIso, options = {}) {
         state.currentWeek = cached.weekStart || cacheWeek;
         refreshChanges();
         renderDiary(cached);
-        if (state.tab === "today") renderToday();
+        if (state.tab === "home") renderHome();
       } else if (list) {
         list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
       }
@@ -850,7 +888,7 @@ function loadDiary(weekIso, options = {}) {
       refreshChanges();
       renderDiary(data);
       applyDiaryDerived();
-      if (state.tab === "today") renderToday();
+      if (state.tab === "home") renderHome();
       clearOfflineBanner();
       return data;
     } catch (err) {
@@ -891,7 +929,7 @@ function loadSchedule(weekIso) {
         state.scheduleWeek = cached.weekStart || cacheWeek;
         refreshChanges();
         renderScheduleData(cached);
-        if (state.tab === "today") renderToday();
+        if (state.tab === "home") renderHome();
       } else if (list) {
         list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div>`;
       }
@@ -905,7 +943,7 @@ function loadSchedule(weekIso) {
       state.scheduleWeek = data.weekStart;
       refreshChanges();
       renderScheduleData(data);
-      if (state.tab === "today") renderToday();
+      if (state.tab === "home") renderHome();
       clearOfflineBanner();
       return data;
     } catch (err) {
@@ -1077,7 +1115,7 @@ function revealCachedApp() {
   appRevealed = true;
   state.authenticated = true;
   selectTab(state.tab);
-  renderToday();
+  renderHome();
   revalidateAll();
 }
 
@@ -1104,7 +1142,7 @@ function revalidateAll() {
   if (needNextWeek) tasks.push(loadNextWeekSchedule());
 
   Promise.allSettled(tasks).then(() => {
-    if (state.tab === "today") renderToday();
+    if (state.tab === "home") renderHome();
     scheduleDiaryPreload();
   });
 }
@@ -1365,7 +1403,7 @@ function applyResultsMode() {
   termEl.setAttribute("aria-hidden", isYear ? "true" : "false");
 }
 
-function ensureTodayData() {
+function ensureHomeData() {
   const thisWeek = weekStartIso(localIsoDate());
   const tasks = [];
 
@@ -1378,23 +1416,58 @@ function ensureTodayData() {
   }
   if (!state.grades && !state.gradesPromise) tasks.push(loadGrades());
 
-  renderToday();
+  renderHome();
 
   if (tasks.length) {
     Promise.allSettled(tasks).then(() => {
-      if (state.tab === "today") renderToday();
+      if (state.tab === "home") renderHome();
     });
+  }
+}
+
+// --- Панель настроек ---
+const SETTINGS_TABS = ["home", "interface", "background", "data", "service"];
+let tabBeforeSettings = "home";
+
+/** Открывает панель настроек (по умолчанию — вкладка «Главная»). */
+function openSettings(tabName) {
+  if (state.tab !== "settings") tabBeforeSettings = state.tab || "home";
+  selectTab("settings");
+  selectSettingsTab(tabName || "home");
+}
+
+/** Закрывает настройки и возвращает на прежний экран. */
+function closeSettings() {
+  selectTab(tabBeforeSettings || "home");
+}
+
+/** Переключает вкладку внутри настроек. */
+function selectSettingsTab(name) {
+  const tabName = SETTINGS_TABS.includes(name) ? name : "home";
+  document.querySelectorAll("#settings-tabs .tab").forEach((t) => {
+    t.classList.toggle("is-active", t.dataset.settingsTab === tabName);
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    pane.classList.toggle("is-active", pane.dataset.settingsPane === tabName);
+  });
+  if (tabName === "home") {
+    const list = document.querySelector("#home-modules-list");
+    if (list) renderModuleList(list, () => { if (state.tab === "home") renderHome(); });
   }
 }
 
 function selectTab(name) {
   state.tab = name;
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
+  // Панель настроек — отдельный экран: вкладки верхней панели оставляем
+  // подсвеченными, чтобы было видно, откуда пришли.
+  if (name !== "settings") {
+    document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
+  }
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("is-active", p.dataset.panel === name));
 
   if (!state.authenticated) return;
 
-  if (name === "today") ensureTodayData();
+  if (name === "home") ensureHomeData();
   if (name === "new") renderNew();
   if (name === "grades" || name === "attendance" || name === "calc" || name === "analytics") loadGrades();
   if (name === "results") loadResults();
@@ -1564,8 +1637,8 @@ function init() {
   });
 
   document.querySelector("#refresh").addEventListener("click", refreshAll);
-  const todayRefresh = document.querySelector("#today-refresh");
-  if (todayRefresh) todayRefresh.addEventListener("click", refreshAll);
+  const homeRefresh = document.querySelector("#home-refresh");
+  if (homeRefresh) homeRefresh.addEventListener("click", refreshAll);
   document.querySelector("#copy").addEventListener("click", copyHomework);
   bindTermSelectors();
   bindResultsControls();
@@ -1624,7 +1697,7 @@ function init() {
       if (state.schedule) {
         renderScheduleData(state.schedule);
       }
-      if (state.tab === "today") renderToday();
+      if (state.tab === "home") renderHome();
     });
   });
 
@@ -1648,7 +1721,7 @@ function init() {
 
   setInterval(() => {
     if (state.schedule) updateScheduleStatus();
-    if (state.tab === "today") updateTodayLive();
+    if (state.tab === "home") updateHomeLive();
   }, 10000);
 }
 
