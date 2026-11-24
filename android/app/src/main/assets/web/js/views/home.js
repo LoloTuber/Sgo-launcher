@@ -1,12 +1,12 @@
 import { state } from '../state.js';
 import {
   escapeHtml, shortDate, markCls, localIsoDate, addDaysIso, capitalize, toast,
-  isImportantTalkSubject, formatAverage,
+  isImportantTalkSubject, formatAverage, isDebtMark,
 } from '../utils.js';
 import {
   getScheduleNow, getNextSchoolDay, editScheduleNote, formatScheduleNote, formatLeft,
 } from './schedule.js';
-import { subjectAverage } from '../weights.js';
+import { subjectAverage, overallAverage, valueOf } from '../weights.js';
 import {
   isNewMark, isNewHomework, isDayChanged, markAllRead,
   newMarksCount, newHomeworkCount, changedDaysCount,
@@ -386,8 +386,12 @@ function summaryCard() {
 
   for (const subject of subjects) {
     for (const mark of subject.marks || []) {
-      marks += 1;
-      if (mark.value === "." || mark.value === "-") debts += 1;
+      // Долг («.»/«-») — это долг, а не числовая оценка, в счёт не идёт.
+      if (isDebtMark(mark && mark.value)) {
+        debts += 1;
+        continue;
+      }
+      if (valueOf(mark) != null) marks += 1;
     }
     // Средние из СГО весов не учитывают, поэтому риск считаем сами.
     const ownAverage = subjectAverage(subject);
@@ -397,9 +401,13 @@ function summaryCard() {
     }
   }
 
+  // Средний балл — взвешенный, как в шапке, чтобы числа не расходились.
+  const average = overallAverage(subjects);
+  const shownAverage = average != null ? average : grades.average;
+
   const tiles = [
     `<div class="home-summary-item">
-       <span class="home-summary-value">${escapeHtml(formatAverage(grades.average))}</span>
+       <span class="home-summary-value">${escapeHtml(formatAverage(shownAverage))}</span>
        <span class="home-summary-label">средний балл</span>
      </div>`,
     `<div class="home-summary-item">
@@ -421,7 +429,7 @@ function summaryCard() {
   if (risky) {
     tiles.push(`<div class="home-summary-item is-warn">
        <span class="home-summary-value">${risky}</span>
-       <span class="home-summary-label">предметов в риске</span>
+       <span class="home-summary-label">${riskWord(risky)}</span>
      </div>`);
   }
 
@@ -465,6 +473,15 @@ function debtWord(count) {
   if (mod10 === 1 && mod100 !== 11) return "долг";
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "долга";
   return "долгов";
+}
+
+/** «1 предмет в риске», «2 предмета в риске», «5 предметов в риске». */
+function riskWord(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "предмет в риске";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "предмета в риске";
+  return "предметов в риске";
 }
 
 function attentionCard() {
