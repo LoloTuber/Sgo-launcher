@@ -383,16 +383,24 @@ function summaryCard() {
   let debts = 0;
   let risky = 0;
   const riskyNames = [];
+  // Предметы, в которых есть хоть одна оценка: сервер ПК отдаёт все предметы
+  // периода, Android — только с оценками, поэтому считаем одинаково.
+  let subjectsWithMarks = 0;
 
   for (const subject of subjects) {
+    let subjectMarks = 0;
     for (const mark of subject.marks || []) {
       // Долг («.»/«-») — это долг, а не числовая оценка, в счёт не идёт.
       if (isDebtMark(mark && mark.value)) {
         debts += 1;
         continue;
       }
-      if (valueOf(mark) != null) marks += 1;
+      if (valueOf(mark) != null) {
+        marks += 1;
+        subjectMarks += 1;
+      }
     }
+    if (subjectMarks) subjectsWithMarks += 1;
     // Средние из СГО весов не учитывают, поэтому риск считаем сами.
     const ownAverage = subjectAverage(subject);
     if (ownAverage != null && ownAverage < 3.5) {
@@ -415,8 +423,8 @@ function summaryCard() {
        <span class="home-summary-label">${markWord(marks)}</span>
      </div>`,
     `<div class="home-summary-item">
-       <span class="home-summary-value">${subjects.length}</span>
-       <span class="home-summary-label">${subjectWord(subjects.length)}</span>
+       <span class="home-summary-value">${subjectsWithMarks}</span>
+       <span class="home-summary-label">${subjectWord(subjectsWithMarks)}</span>
      </div>`,
   ];
 

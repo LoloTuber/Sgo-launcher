@@ -208,6 +208,11 @@ private val CODE_ALIASES = mapOf(
  *
  * СГО пишет в одной ячейке и оценку, и код пропуска, причём они могут быть
  * разделены обычным пробелом, неразрывным (&nbsp;) или идти слитно («5Н»).
+ *
+ * ВАЖНО: Regex.split в Kotlin, в отличие от re.split в Python, ВЫБРАСЫВАЕТ
+ * найденные совпадения — числа просто исчезали из ячейки, и оценки не
+ * разбирались вообще. Поэтому числа выделяем через findAll, а остаток
+ * («Н» из «5Н») сохраняем отдельным токеном — как это делает ПК-парсер.
  */
 private fun splitCellTokens(value: String): List<String> {
     val text = CELL_SPACE_REGEX.replace(value, " ").trim()
@@ -215,10 +220,15 @@ private fun splitCellTokens(value: String): List<String> {
     val tokens = ArrayList<String>()
     for (raw in text.split(" ")) {
         if (raw.isEmpty()) continue
-        for (part in NUM_PART_REGEX.split(raw)) {
-            val p = part.trim()
-            if (p.isNotEmpty()) tokens.add(p)
+        var last = 0
+        for (match in NUM_PART_REGEX.findAll(raw)) {
+            val before = raw.substring(last, match.range.first).trim()
+            if (before.isNotEmpty()) tokens.add(before)
+            tokens.add(match.value)
+            last = match.range.last + 1
         }
+        val after = raw.substring(last).trim()
+        if (after.isNotEmpty()) tokens.add(after)
     }
     return tokens
 }

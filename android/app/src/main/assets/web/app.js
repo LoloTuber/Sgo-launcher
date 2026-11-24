@@ -1254,6 +1254,14 @@ function applyTerms(terms) {
   if (!Array.isArray(terms) || !terms.length) return;
 
   const saved = lsGet("sgo.term") || "";
+  // Период по умолчанию — тот, в который попадает сегодняшняя дата.
+  // Раньше селект после пересборки оставался на первом варианте,
+  // и на свежей установке показывался прошлый триместр вместо текущего.
+  const today = localIsoDate();
+  const current = terms.find((t) => t.start && t.end && t.start <= today && today <= t.end);
+  const fallbackId = (current || terms[terms.length - 1]).id;
+  const wanted = terms.some((t) => t.id === saved) ? saved : fallbackId;
+
   for (const sel of TERM_SELECTORS) {
     const el = document.querySelector(sel);
     if (!el) continue;
@@ -1262,12 +1270,9 @@ function applyTerms(terms) {
       const opt = document.createElement("option");
       opt.value = t.id;
       opt.textContent = t.name;
-      if (t.id === saved) opt.selected = true;
       el.appendChild(opt);
     }
-    if (!el.value && terms.length) {
-      el.value = terms[terms.length - 1].id;
-    }
+    el.value = wanted;
   }
 }
 
