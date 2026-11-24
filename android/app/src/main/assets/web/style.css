@@ -197,6 +197,17 @@ body.dark-theme .diary-date-input { color-scheme: dark; }
   transition: background 0.15s;
 }
 .btn.btn-outline:hover { background: var(--green-50); }
+/* Кнопки-контуры без класса .btn (кнопки в списках настроек).
+   Им тоже нужен свой фон: без него остаётся светлая заливка нативной
+   кнопки, и в тёмной теме светлый текст на ней не виден. */
+.btn-outline {
+  background: transparent; color: var(--green-700); border: 1px solid var(--green-200);
+  padding: 5px 10px; border-radius: 9px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-outline:hover { background: var(--green-50); }
+body.dark-theme .btn-outline { border-color: var(--line); color: var(--ink); }
+body.dark-theme .btn-outline:hover { background: var(--green-100); }
 /* Кнопка выхода из аккаунта: заметная, но не кричащая. */
 .btn.btn-danger { color: var(--red); border-color: rgba(200, 60, 60, 0.45); background: transparent; }
 .btn.btn-danger:hover { background: rgba(200, 60, 60, 0.10); border-color: var(--red); }
