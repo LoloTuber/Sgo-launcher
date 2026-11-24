@@ -178,7 +178,10 @@
   <section class="panel" data-panel="settings">
     <div class="panel-head">
       <div><h2>Настройки</h2><p class="subtle" id="settings-sub">Все настройки приложения</p></div>
-      <button id="close-settings" class="btn" type="button">Готово</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="logout-btn" class="btn btn-outline btn-danger" type="button">Выйти из аккаунта</button>
+        <button id="close-settings" class="btn" type="button">Готово</button>
+      </div>
     </div>
 
     <nav class="tabs settings-tabs" id="settings-tabs" role="tablist">
@@ -309,10 +312,6 @@
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="settings-footer">
-      <button id="logout-btn" class="btn" style="background: var(--red); border-color: var(--red);">Выйти</button>
     </div>
   </section>
 </main>
