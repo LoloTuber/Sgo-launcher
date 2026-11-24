@@ -1,7 +1,8 @@
-import { escapeHtml, shortDate, markCls, formatAverage } from '../utils.js';
+import { escapeHtml, shortDate, markCls, formatAverage, isDebtMark } from '../utils.js';
 import { isNewMark, newMarksCount } from '../changes.js';
 import { loadDetails, renderAssignmentDetails } from './details.js';
 import { userError } from '../errors.js';
+import { overallAverage, valueOf } from '../weights.js';
 
 /** Диапазон дат периода: «01.09.2026 – 22.11.2026». */
 function periodRange(data) {
@@ -26,9 +27,18 @@ export function renderGrades(data) {
     (fresh ? ` · новых: ${fresh}` : "");
 
   const counts = data.counts || {};
+  // Средний балл — взвешенный (вес задания, долг = 2), как в шапке и в «Сводке».
+  const allSubjects = data.subjects || [];
+  const weighted = overallAverage(allSubjects);
+  const averageValue = weighted != null ? weighted : data.average;
+  // Долги («.»/«-») — это долги, а не оценки, поэтому в счёт не идут.
+  const marksCount = allSubjects.reduce(
+    (acc, subj) => acc + (subj.marks || []).filter((m) => !isDebtMark(m.value) && valueOf(m) != null).length,
+    0,
+  );
   const summary = [
-    `<span class="chip" title="Считается с учётом весов оценок (10/15/20/30), долг — как «2»">Средний балл <b>${formatAverage(data.average)}</b></span>`,
-    `<span class="chip">Оценок <b>${data.marksCount || 0}</b></span>`,
+    `<span class="chip" title="Считается с учётом весов оценок (10/15/20/30), долг — как «2»">Средний балл <b>${formatAverage(averageValue)}</b></span>`,
+    `<span class="chip" title="Долги («.» или «-») считаются отдельно и в оценки не входят">Оценок <b>${marksCount}</b></span>`,
   ];
   if (fresh) summary.push(`<span class="chip chip-new">Новых <b>${fresh}</b></span>`);
   ["5", "4", "3", "2"].forEach((v) => {
@@ -52,7 +62,7 @@ export function renderGrades(data) {
   const dots = [];
   subjects.forEach(subj => {
     subj.marks.forEach(m => {
-      if (m.value === "." || m.value === "-") {
+      if (isDebtMark(m.value)) {
         dots.push({
           subject: subj.name,
           date: m.date,
@@ -68,14 +78,14 @@ export function renderGrades(data) {
     dots.sort((a, b) => (a.date < b.date ? 1 : -1));
 
     dotsHtml = `
-      <div class="calc-card" style="border-color: var(--red); background: #fff5f5; margin-bottom: 20px;">
-        <div class="calc-title" style="color: var(--red); border-bottom-color: #fde8e7;">
+      <div class="debt-card">
+        <div class="debt-card-title">
           ⚠️ Текущие точки (требуют исправления)
         </div>
         <div class="calc-list">
           ${dots.map(d => `
-            <div class="calc-row" style="background: transparent; border-bottom: 1px dashed #fde8e7; border-radius: 0; padding: 10px 0;">
-              <span class="mark-value m0" style="min-width: 30px; height: 30px; font-size: 20px;">.</span>
+            <div class="calc-row debt-row">
+              <span class="mark-value m0 debt-dot">.</span>
               <div class="calc-row-info">
                 <div class="calc-row-topic">${escapeHtml(d.subject)}</div>
                 <div class="calc-row-meta">${escapeHtml(shortDate(d.date))} · ${escapeHtml(d.topic)}</div>
@@ -83,7 +93,7 @@ export function renderGrades(data) {
             </div>
           `).join("")}
         </div>
-        <p style="font-size:12px;color:var(--red);margin-top:12px;opacity:0.8;">* Долг учитывается в среднем балле как «2» (с весом задания), но его нужно исправить.</p>
+        <p class="debt-note">* Долг учитывается в среднем балле как «2» (с весом задания), но его нужно исправить.</p>
       </div>
     `;
   }
@@ -114,8 +124,10 @@ export function renderGrades(data) {
         `;
       }).join("");
 
-      const avg = subj.average != null
-        ? `<span class="badge">${formatAverage(subj.average)}</span>` : "";
+      // Средний по предмету — взвешенный (вес задания, долг = 2), как в шапке.
+      const subjectAvg = subj.weightedAverage != null ? subj.weightedAverage : subj.average;
+      const avg = subjectAvg != null
+        ? `<span class="badge">${formatAverage(subjectAvg)}</span>` : "";
       return `<article class="subject">
         <div class="subject-head">
           <h3>${escapeHtml(subj.name)}</h3>

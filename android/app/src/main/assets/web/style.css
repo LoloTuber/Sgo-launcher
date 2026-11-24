@@ -16,6 +16,11 @@
   --on-accent: #ffffff;
   --amber: #d98324;
   --red: #c8453d;
+  /* Блок «Текущие точки»: подложка, рамка и текст предупреждения.
+     Значения переопределяются в тёмной теме. */
+  --warn-surface: #fff5f5;
+  --warn-border: #fde8e7;
+  --warn-text: #c8453d;
   --radius: 16px;
   --shadow: 0 10px 30px rgba(16, 80, 47, 0.08);
 }
@@ -714,6 +719,31 @@ body.dark-theme .skeleton {
 .sim-result .old { color: var(--ink-soft); text-decoration: line-through; font-size: 14px; font-weight: normal; }
 .sim-result .new { font-size: 22px; color: var(--green-600); }
 
+/* Блок «Текущие точки» на экране успеваемости.
+   Раньше цвета были зашиты в разметку, и в тёмной теме светлая подложка
+   оставалась светлой, а текст становился светлым — предмет было не видно.
+   Теперь подложка, рамка и текст берутся из переменных темы. */
+.debt-card {
+  background: var(--warn-surface);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px;
+  margin-bottom: 20px;
+}
+.debt-card-title {
+  font-size: 15px; font-weight: 700; color: var(--warn-text);
+  margin-bottom: 9px; border-bottom: 1px solid var(--warn-border); padding-bottom: 6px;
+}
+.debt-row {
+  background: transparent; border: 0; border-bottom: 1px dashed var(--warn-border);
+  border-radius: 0; padding: 10px 0;
+}
+.debt-row .calc-row-topic { color: var(--ink); }
+.debt-row .calc-row-meta { color: var(--ink-soft); }
+.debt-dot { min-width: 30px; height: 30px; font-size: 20px; }
+.debt-note { font-size: 12px; color: var(--warn-text); margin-top: 12px; opacity: 0.85; }
+
 /* Круговая диаграмма */
 .calc-dashboard { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; }
 .pie-chart-container {
@@ -752,6 +782,7 @@ body.dark-theme {
   --green-800: #8cd5b0; --green-700: #6bc696; --white: #1e1e1e;
   --ink: #e0e0e0; --ink-soft: #a0a0a0; --line: #333333;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  --warn-surface: #2a1a1a; --warn-border: #5c3131; --warn-text: #ff8f87;
 }
 body.dark-theme .topbar { background: linear-gradient(135deg, #0a1810, #153d27); color: #ffffff; }
 body.dark-theme .stat { background: rgba(0, 0, 0, 0.3); border-color: rgba(255, 255, 255, 0.1); color: #ffffff; }
@@ -887,7 +918,7 @@ body.dark-theme .mark-value.m4, body.dark-theme .marks .m4, body.dark-theme .mar
 body.dark-theme .mark-value.m3, body.dark-theme .marks .m3, body.dark-theme .mark-chip.m3 { background: #78350f !important; color: #fbbf24 !important; border-color: #b45309 !important; }
 body.dark-theme .mark-value.m2, body.dark-theme .marks .m2, body.dark-theme .mark-chip.m2 { background: #7f1d1d !important; color: #f87171 !important; border-color: #b91c1c !important; }
 body.dark-theme .mark-value.m1, body.dark-theme .marks .m1, body.dark-theme .mark-chip.m1 { background: #831843 !important; color: #f472b6 !important; border-color: #be185d !important; }
-body.dark-theme .mark-value.m0, body.dark-theme .marks .m0, body.dark-theme .mark-chip.m0 { background: #3b0764 !important; color: #c084fc !important; border-color: #9333ea !important; border-style: dashed !important; }
+body.dark-theme .mark-value.m0, body.dark-theme .marks .m0, body.dark-theme .mark-chip.m0 { background: #3b0764 !important; color: #d8b4fe !important; border-color: #9333ea !important; border-style: dashed !important; }
 
 /* =========================================
    ЦВЕТОВЫЕ ТЕМЫ (синяя, розовая, фиолетовая, оранжевая,
