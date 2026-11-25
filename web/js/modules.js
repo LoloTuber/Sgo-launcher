@@ -29,11 +29,16 @@ const STORAGE_KEY = "sgo.home.layout";
 export const MIN_SPAN = 1;
 export const MAX_SPAN = 3;
 
+/** Высота модуля: сколько пикселей занимает карточка. 0 — по содержимому. */
+export const MIN_HEIGHT = 120;
+export const MAX_HEIGHT = 1600;
+
 const DEFAULT_LAYOUT = Object.freeze({
   order: MODULE_IDS.slice(),
   hidden: [],
   wide: [],
   spans: {},
+  heights: {},
   columns: 1,
 });
 
@@ -51,6 +56,7 @@ function sanitize(raw) {
     hidden: [],
     wide: [],
     spans: {},
+    heights: {},
     columns: 1,
   };
   if (raw && typeof raw === "object" && raw !== null) {
@@ -61,6 +67,12 @@ function sanitize(raw) {
       for (const id of MODULE_IDS) {
         const span = Number(raw.spans[id]);
         if (Number.isFinite(span)) layout.spans[id] = clampSpan(span);
+      }
+    }
+    if (raw.heights && typeof raw.heights === "object") {
+      for (const id of MODULE_IDS) {
+        const height = clampHeight(raw.heights[id]);
+        if (height) layout.heights[id] = height;
       }
     }
     if (raw.columns != null) layout.columns = clampSpan(raw.columns);
@@ -88,16 +100,39 @@ function clampSpan(value) {
   return span;
 }
 
+/** Высота модуля в пикселях. 0 — карточка по содержимому. */
+function clampHeight(value) {
+  const height = Math.round(Number(value) || 0);
+  if (!height) return 0;
+  if (height < MIN_HEIGHT) return MIN_HEIGHT;
+  if (height > MAX_HEIGHT) return MAX_HEIGHT;
+  return height;
+}
+
 /** Текущая раскладка главного экрана. */
 export function getHomeLayout() {
   const raw = readRaw();
   if (!raw) {
-    return { ...DEFAULT_LAYOUT, order: DEFAULT_LAYOUT.order.slice(), hidden: [], wide: [], spans: {} };
+    return {
+      ...DEFAULT_LAYOUT,
+      order: DEFAULT_LAYOUT.order.slice(),
+      hidden: [],
+      wide: [],
+      spans: {},
+      heights: {},
+    };
   }
   try {
     return sanitize(JSON.parse(raw));
   } catch (_) {
-    return { ...DEFAULT_LAYOUT, order: DEFAULT_LAYOUT.order.slice(), hidden: [], wide: [], spans: {} };
+    return {
+      ...DEFAULT_LAYOUT,
+      order: DEFAULT_LAYOUT.order.slice(),
+      hidden: [],
+      wide: [],
+      spans: {},
+      heights: {},
+    };
   }
 }
 
@@ -194,11 +229,32 @@ export function setModuleSpan(id, span) {
 export function getGridColumns(layout = getHomeLayout()) {
   return clampSpan(layout.columns || 1);
 }
-
 /** Задаёт число колонок в сетке главного экрана (1–3). */
 export function setGridColumns(columns) {
   const layout = getHomeLayout();
   layout.columns = clampSpan(columns);
+  return saveHomeLayout(layout);
+}
+
+/** Заданная высота модуля в пикселях (0 — по содержимому). */
+export function getModuleHeight(id, layout = getHomeLayout()) {
+  const heights = layout.heights || {};
+  return clampHeight(heights[id]);
+}
+
+/** Задаёт высоту модуля в пикселях (0 — вернуть по содержимому). */
+export function setModuleHeight(id, height) {
+  const layout = getHomeLayout();
+  const value = clampHeight(height);
+  if (!value) delete layout.heights[id];
+  else layout.heights[id] = value;
+  return saveHomeLayout(layout);
+}
+
+/** Убирает заданные высоты у всех модулей. */
+export function clearModuleHeights() {
+  const layout = getHomeLayout();
+  layout.heights = {};
   return saveHomeLayout(layout);
 }
 

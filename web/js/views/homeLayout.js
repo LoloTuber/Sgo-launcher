@@ -9,6 +9,7 @@
 import {
   HOME_MODULES, getHomeLayout, setModuleVisible, setModuleOrder, moveModule,
   setModuleSpan, getModuleSpan, setGridColumns, getGridColumns, moduleTitle,
+  getModuleHeight, setModuleHeight, clearModuleHeights,
   saveHomeLayout,
 } from "../modules.js";
 import { escapeHtml } from "../utils.js";
@@ -40,6 +41,16 @@ export function renderModuleList(container, onChanged) {
          </select>`
       : "";
 
+    // Заданная высота модуля и кнопка возврата к обычной.
+    const height = getModuleHeight(id, layout);
+    const heightBox = height
+      ? `<span class="module-row-height">
+           <span class="module-height-value">${height} px</span>
+           <button class="module-height-reset" type="button" data-reset-height="${escapeHtml(id)}"
+                   title="Вернуть высоту по содержимому" aria-label="Вернуть высоту по содержимому">⟲</button>
+         </span>`
+      : "";
+
     return `
       <div class="module-row ${visible ? "" : "is-hidden"}" draggable="true" data-module-id="${escapeHtml(id)}">
         <span class="module-drag" title="Перетащите, чтобы изменить порядок">⋮⋮</span>
@@ -49,6 +60,7 @@ export function renderModuleList(container, onChanged) {
           <span class="module-row-hint">${escapeHtml(hint)}</span>
         </label>
         <span class="module-row-width">${widthSelect}</span>
+        <span class="module-row-height-cell">${heightBox}</span>
         <span class="module-row-move">
           <button class="module-move-btn" type="button" data-move="-1" data-module-id="${escapeHtml(id)}"
                   title="Поднять выше" aria-label="Поднять выше" ${index === 0 ? "disabled" : ""}>↑</button>
@@ -74,6 +86,15 @@ export function renderModuleList(container, onChanged) {
   container.querySelectorAll(".module-width").forEach((select) => {
     select.addEventListener("change", () => {
       setModuleSpan(select.dataset.moduleId, Number(select.value));
+      renderModuleList(container, onChanged);
+      if (onChanged) onChanged();
+    });
+  });
+
+  // Возврат высоты модуля к обычной.
+  container.querySelectorAll(".module-height-reset").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setModuleHeight(btn.dataset.resetHeight, 0);
       renderModuleList(container, onChanged);
       if (onChanged) onChanged();
     });
@@ -150,7 +171,9 @@ export function resetModuleLayout(container, onChanged) {
   layout.spans = {};
   layout.columns = 1;
   layout.wide = [];
+  layout.heights = {};
   setModuleOrder(defaults);
+  clearModuleHeights();
   saveHomeLayout(layout);
   renderModuleList(container, onChanged);
   if (onChanged) onChanged();

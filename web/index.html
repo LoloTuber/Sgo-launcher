@@ -175,8 +175,12 @@
     </div>
     <div id="calc-content" class="list"></div>
   </section>
-  <section class="panel" data-panel="settings">
-    <div class="panel-head">
+</main>
+
+  <!-- Настройки открываются поверх текущего экрана, как раньше, но с вкладками. -->
+  <div id="settings-modal" class="modal settings-modal" hidden>
+    <div class="modal-content settings-content">
+    <div class="panel-head settings-head">
       <div><h2>Настройки</h2><p class="subtle" id="settings-sub">Все настройки приложения</p></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button id="logout-btn" class="btn btn-outline btn-danger" type="button">Выйти из аккаунта</button>
@@ -197,7 +201,7 @@
       <div class="settings-pane is-active" data-settings-pane="home">
         <div class="settings-block">
           <div class="settings-block-title">🧩 Модули главного экрана</div>
-          <p class="subtle">Главный экран собирается из модулей. Лишние можно убрать, порядок — поменять, а ширину — задать. На самом экране модули перетаскиваются кнопкой «Переместить».</p>
+          <p class="subtle">Главный экран собирается из модулей. Лишние можно убрать, порядок — поменять, а ширину — задать. На самом экране модули перетаскиваются кнопкой «Переместить»: в сетке появляется рамка, куда модуль встанет, а за угол модуля можно растянуть по высоте.</p>
           <div class="settings-row">
             <label for="home-grid-columns">Сколько колонок на экране</label>
             <select id="home-grid-columns" class="term-select">
@@ -313,8 +317,8 @@
         </div>
       </div>
     </div>
-  </section>
-</main>
+    </div>
+  </div>
 
 <footer class="footer">
   <span id="updated">—</span>
@@ -352,6 +356,18 @@
 
     <button id="login-btn" class="btn" style="width: 100%; margin-top: 10px;">Войти</button>
     <p id="login-error" style="color: var(--red); font-size: 13px; margin-top: 12px; text-align: center;"></p>
+  </div>
+</div>
+
+<!-- Подтверждение действия: выход из аккаунта и другие важные вопросы. -->
+<div id="confirm-modal" class="modal" hidden>
+  <div class="modal-content confirm-content">
+    <h3 id="confirm-title">Подтвердите действие</h3>
+    <p class="subtle" id="confirm-text"></p>
+    <div class="confirm-actions">
+      <button id="confirm-cancel" class="btn btn-outline" type="button">Отмена</button>
+      <button id="confirm-ok" class="btn btn-danger" type="button">Продолжить</button>
+    </div>
   </div>
 </div>
 

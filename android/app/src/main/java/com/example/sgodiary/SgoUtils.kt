@@ -23,8 +23,8 @@ internal const val TERM_PERIODS_CACHE_TTL = 30 * 60 * 1000L
 internal const val HOME_IMAGE_MAX_BYTES = 12 * 1024 * 1024
 
 /** Версия приложения: показывается в служебном режиме. */
-internal const val APP_VERSION = "1.4"
-internal const val APP_BUILD = "2026-11-24"
+internal const val APP_VERSION = "1.4.1"
+internal const val APP_BUILD = "2026-11-25"
 
 internal val WEEKDAYS = arrayOf(
     "воскресенье", "понедельник", "вторник", "среда",

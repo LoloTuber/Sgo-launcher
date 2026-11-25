@@ -404,6 +404,57 @@ async function notifyAutostart(enabled) {
   }
 }
 
+/**
+ * Своё окно подтверждения вместо системного confirm().
+ *
+ * Системный confirm() в окне приложения выглядит чужеродно и иногда
+ * вообще не показывается, поэтому делаем обычное окно приложения.
+ */
+function askConfirm({ title, text, okLabel, cancelLabel } = {}) {
+  return new Promise((resolve) => {
+    const modal = document.querySelector("#confirm-modal");
+    const titleEl = document.querySelector("#confirm-title");
+    const textEl = document.querySelector("#confirm-text");
+    const okBtn = document.querySelector("#confirm-ok");
+    const cancelBtn = document.querySelector("#confirm-cancel");
+
+    if (!modal || !okBtn || !cancelBtn) {
+      resolve(window.confirm(text || "Продолжить?"));
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = title || "Подтвердите действие";
+    if (textEl) textEl.textContent = text || "";
+    okBtn.textContent = okLabel || "Продолжить";
+    cancelBtn.textContent = cancelLabel || "Отмена";
+    modal.hidden = false;
+
+    const finish = (value) => {
+      modal.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKey, true);
+      resolve(value);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        finish(false);
+      } else if (event.key === "Enter") {
+        event.stopPropagation();
+        finish(true);
+      }
+    };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKey, true);
+    cancelBtn.focus();
+  });
+}
+
 // --- Настройки (отдельная панель с вкладками + цветовая тема) ---
 function initSettings() {
   const btn = document.querySelector("#settings-btn");
@@ -411,6 +462,19 @@ function initSettings() {
 
   btn.addEventListener("click", () => openSettings());
   closeBtn.addEventListener("click", () => closeSettings());
+
+  // Клик по тёмному фону и Esc закрывают окно настроек.
+  const settingsModal = document.querySelector("#settings-modal");
+  if (settingsModal) {
+    settingsModal.addEventListener("click", (event) => {
+      if (event.target === settingsModal) closeSettings();
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (document.querySelector("#confirm-modal") && !document.querySelector("#confirm-modal").hidden) return;
+    if (settingsModal && !settingsModal.hidden) closeSettings();
+  });
 
   // Кнопка «Настроить модули» на главном экране.
   const layoutBtn = document.querySelector("#home-layout-btn");
@@ -489,7 +553,13 @@ function initSettings() {
   const logoutBtn = document.querySelector("#logout-btn");
   if (logoutBtn) {
     logoutBtn.addEventListener("click", async () => {
-      if (!confirm("Вы уверены, что хотите выйти из аккаунта?")) return;
+      const confirmed = await askConfirm({
+        title: "Выйти из аккаунта?",
+        text: "Приложение забудет логин и пароль, а сохранённые данные дневника будут удалены с этого устройства.",
+        okLabel: "Выйти",
+        cancelLabel: "Отмена",
+      });
+      if (!confirmed) return;
 
       try {
         await fetch('/api/logout', { method: 'POST' });
@@ -530,7 +600,7 @@ function initSettings() {
         document.querySelector("#login-pass").value = "";
         showLogin();
       } catch (e) {
-        alert("Ошибка при выходе из аккаунта");
+        toast("Не удалось выйти из аккаунта");
       }
     });
   }
@@ -1445,18 +1515,23 @@ function ensureHomeData() {
 
 // --- Панель настроек ---
 const SETTINGS_TABS = ["home", "interface", "background", "data", "service"];
-let tabBeforeSettings = "home";
 
-/** Открывает панель настроек (по умолчанию — вкладка «Главная»). */
+/**
+ * Открывает настройки поверх текущего экрана (как раньше), но с вкладками.
+ * Текущий раздел при этом не меняется — настройки лежат поверх него.
+ */
 function openSettings(tabName) {
-  if (state.tab !== "settings") tabBeforeSettings = state.tab || "home";
-  selectTab("settings");
+  const modal = document.querySelector("#settings-modal");
+  if (modal) modal.hidden = false;
+  document.body.classList.add("settings-open");
   selectSettingsTab(tabName || "home");
 }
 
-/** Закрывает настройки и возвращает на прежний экран. */
+/** Закрывает окно настроек и возвращает к текущему экрану. */
 function closeSettings() {
-  selectTab(tabBeforeSettings || "home");
+  const modal = document.querySelector("#settings-modal");
+  if (modal) modal.hidden = true;
+  document.body.classList.remove("settings-open");
 }
 
 /** Переключает вкладку внутри настроек. */
@@ -1476,11 +1551,7 @@ function selectSettingsTab(name) {
 
 function selectTab(name) {
   state.tab = name;
-  // Панель настроек — отдельный экран: вкладки верхней панели оставляем
-  // подсвеченными, чтобы было видно, откуда пришли.
-  if (name !== "settings") {
-    document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
-  }
+  document.querySelectorAll(".tab[data-tab]").forEach((t) => t.classList.toggle("is-active", t.dataset.tab === name));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("is-active", p.dataset.panel === name));
 
   if (!state.authenticated) return;

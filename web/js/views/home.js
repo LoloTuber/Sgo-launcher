@@ -11,7 +11,7 @@ import {
   isNewMark, isNewHomework, isDayChanged, markAllRead,
   newMarksCount, newHomeworkCount, changedDaysCount,
 } from '../changes.js';
-import { getHomeLayout, visibleModules, getGridColumns, getModuleSpan, setModuleOrder } from '../modules.js';
+import { getHomeLayout, visibleModules, getGridColumns, getModuleSpan, setModuleOrder, getModuleHeight, setModuleHeight, moduleTitle, MIN_HEIGHT } from '../modules.js';
 import { renderNotesModule, bindNotesModule } from './notes.js';
 import { renderImageModule, bindImageModule, loadImageInfo, ensureImageInfo, getImageInfo } from './image.js';
 
@@ -557,6 +557,15 @@ function withDragHandle(html) {
   );
 }
 
+/**
+ * Ручка изменения высоты — в правом нижнем углу модуля.
+ * Показывается только в режиме редактирования.
+ */
+function withResizeGrip(html) {
+  return `${String(html || "")}<button class="home-module-resize" type="button"
+    title="Изменить высоту модуля" aria-label="Изменить высоту модуля">⠿</button>`;
+}
+
 // Режим редактирования: показываем ручки и подсказку про перетаскивание.
 let editMode = false;
 
@@ -633,13 +642,16 @@ export function renderHome() {
       const html = render();
       if (!html) return "";
       const span = Math.min(getModuleSpan(id, layout), columns);
-      const card = editMode ? withDragHandle(html) : html;
-      return `<section class="home-module" data-module="${id}" style="--span: ${span}">${card}</section>`;
+      const height = getModuleHeight(id, layout);
+      const card = editMode ? withResizeGrip(withDragHandle(html)) : html;
+      const style = `--span: ${span};${height ? ` --module-height: ${height}px;` : ""}`;
+      const cls = `home-module${height ? " has-height" : ""}`;
+      return `<section class="${cls}" data-module="${id}" style="${style}">${card}</section>`;
     })
     .join("");
 
   const editHint = editMode
-    ? `<div class="home-edit-hint">Режим перетаскивания: тяните модуль за ручку «⋮⋮», чтобы поменять местами.</div>`
+    ? `<div class="home-edit-hint">Режим перетаскивания: тяните модуль за ручку «⋮⋮» — на его месте появится рамка, куда он встанет. За угол «⠿» тяните, чтобы изменить высоту модуля.</div>`
     : "";
 
   content.classList.toggle("is-editing", editMode);
@@ -676,16 +688,65 @@ export function renderHome() {
  *
  * Тянуть можно за ручку «⋮⋮» в шапке модуля — так текст в заметках
  * по-прежнему выделяется мышью, а кнопки внутри карточек работают.
+ *
+ * Пока модуль тянут, на его месте в сетке стоит рамка — она показывает,
+ * куда модуль встанет после отпускания.
  */
 function bindHomeGrid(container) {
   const grid = container.querySelector(".home-grid");
   if (!grid) return;
 
   let dragId = null;
+  let draggedEl = null;
+  let frame = null;       // рамка-место поверх сетки
+  let targetEl = null;    // модуль, к которому подводится модуль
+  let insertAfter = false; // вставлять перед модулем или после него
+
+  const removeFrame = () => {
+    if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
+    frame = null;
+    targetEl = null;
+  };
+
+  /** Рамка-место: показывает ячейку, в которую встанет модуль. */
+  const showFrame = (rect, title) => {
+    if (!frame) {
+      frame = document.createElement("div");
+      frame.className = "home-module-frame";
+      grid.appendChild(frame);
+    }
+    const gridRect = grid.getBoundingClientRect();
+    frame.style.left = `${Math.round(rect.left - gridRect.left)}px`;
+    frame.style.top = `${Math.round(rect.top - gridRect.top)}px`;
+    frame.style.width = `${Math.round(rect.width)}px`;
+    frame.style.height = `${Math.round(rect.height)}px`;
+    frame.textContent = title;
+  };
+
+  const updateFrame = (x, y) => {
+    if (!draggedEl) return;
+    const found = moduleUnderPointer(grid, x, y, draggedEl);
+    if (!found) {
+      removeFrame();
+      return;
+    }
+    const module = found.module;
+    const rect = module.getBoundingClientRect();
+    const wide = rowIsWide(grid, module);
+    // В сетке из нескольких колонок решает горизонталь, в одной — вертикаль.
+    insertAfter = wide
+      ? x > rect.left + rect.width / 2
+      : y > rect.top + rect.height / 2;
+
+    targetEl = module;
+    const cell = insertAfter ? cellAfter(grid, module) : rect;
+    if (cell) showFrame(cell, `«${moduleTitle(draggedEl.dataset.module)}» — сюда`);
+  };
 
   grid.querySelectorAll(".home-module").forEach((section) => {
     section.addEventListener("dragstart", (event) => {
       dragId = section.dataset.module;
+      draggedEl = section;
       section.classList.add("is-dragging");
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = "move";
@@ -695,33 +756,139 @@ function bindHomeGrid(container) {
 
     section.addEventListener("dragend", () => {
       section.classList.remove("is-dragging");
-      grid.querySelectorAll(".home-module.is-over").forEach((item) => item.classList.remove("is-over"));
+      removeFrame();
       dragId = null;
+      draggedEl = null;
     });
+  });
 
-    section.addEventListener("dragover", (event) => {
-      if (!dragId || dragId === section.dataset.module) return;
+  grid.addEventListener("dragover", (event) => {
+    if (!dragId || !draggedEl) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    updateFrame(event.clientX, event.clientY);
+  });
+
+  grid.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (draggedEl && targetEl && targetEl !== draggedEl && targetEl.parentNode === grid) {
+      if (insertAfter) grid.insertBefore(draggedEl, targetEl.nextElementSibling);
+      else grid.insertBefore(draggedEl, targetEl);
+    }
+    removeFrame();
+    dragId = null;
+    draggedEl = null;
+
+    const ids = Array.from(grid.querySelectorAll(".home-module"))
+      .map((el) => el.dataset.module)
+      .filter(Boolean);
+    setModuleOrder(ids);
+    renderHome();
+  });
+
+  bindResizeHandles(container);
+}
+
+/** Модуль, под которым оказался указатель (кроме перетаскиваемого). */
+function moduleUnderPointer(grid, x, y, draggedEl) {
+  let el = null;
+  if (typeof document.elementFromPoint === "function") {
+    const hit = document.elementFromPoint(x, y);
+    el = hit && hit.closest ? hit.closest(".home-module") : null;
+  }
+  if (!el) {
+    // Запасной вариант: перебираем модули и ищем тот, в чей прямоугольник попал указатель.
+    el = Array.from(grid.querySelectorAll(".home-module")).find((item) => {
+      if (item === draggedEl) return false;
+      const rect = item.getBoundingClientRect();
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }) || null;
+  }
+  if (!el || el === draggedEl) return null;
+  return { module: el };
+}
+
+/** В строке больше одного модуля — значит сетка многоколоночная. */
+function rowIsWide(grid, module) {
+  const rect = module.getBoundingClientRect();
+  let count = 0;
+  for (const item of grid.querySelectorAll(".home-module")) {
+    const itemRect = item.getBoundingClientRect();
+    if (Math.abs(itemRect.top - rect.top) < 8) count += 1;
+  }
+  return count > 1;
+}
+
+/**
+ * Ячейка, которая окажется после модуля: следующий модуль в сетке,
+ * а если его нет — пустое место справа или снизу.
+ */
+function cellAfter(grid, module) {
+  let next = module.nextElementSibling;
+  while (next && !next.classList.contains("home-module")) next = next.nextElementSibling;
+  if (next) return next.getBoundingClientRect();
+
+  const rect = module.getBoundingClientRect();
+  const gridRect = grid.getBoundingClientRect();
+  const style = window.getComputedStyle ? window.getComputedStyle(grid) : null;
+  const gap = style ? (parseFloat(style.columnGap) || 12) : 12;
+  const columns = style
+    ? style.gridTemplateColumns.split(" ").filter(Boolean).length
+    : 1;
+  const cellWidth = (rect.width + gap) * columns;
+  const used = rect.right - gridRect.left + gap;
+  const rowFull = used >= cellWidth - 1;
+  if (!rowFull) {
+    return {
+      left: rect.right + gap, top: rect.top, width: rect.width, height: rect.height,
+      right: rect.right + gap + rect.width, bottom: rect.bottom,
+    };
+  }
+  return {
+    left: gridRect.left, top: rect.bottom + gap, width: rect.width, height: rect.height,
+    right: gridRect.left + rect.width, bottom: rect.bottom + gap + rect.height,
+  };
+}
+
+/**
+ * Ручка в углу модуля меняет его высоту: тянешь вниз — карточка растёт.
+ * Высота сохраняется, поэтому переживает перезапуск приложения.
+ */
+function bindResizeHandles(container) {
+  container.querySelectorAll(".home-module-resize").forEach((grip) => {
+    const section = grip.closest(".home-module");
+    if (!section) return;
+
+    grip.addEventListener("pointerdown", (event) => {
       event.preventDefault();
-      section.classList.add("is-over");
-    });
+      event.stopPropagation();
 
-    section.addEventListener("dragleave", () => section.classList.remove("is-over"));
+      const startY = event.clientY;
+      const startHeight = section.getBoundingClientRect().height;
+      section.classList.add("is-resizing");
+      try { grip.setPointerCapture(event.pointerId); } catch (_) { /* ignore */ }
 
-    section.addEventListener("drop", (event) => {
-      event.preventDefault();
-      section.classList.remove("is-over");
-      const source = dragId || (event.dataTransfer ? event.dataTransfer.getData("text/plain") : "");
-      const target = section.dataset.module;
-      if (!source || !target || source === target) return;
+      const heightAt = (clientY) => Math.max(MIN_HEIGHT, Math.round(startHeight + (clientY - startY)));
 
-      const order = getHomeLayout().order.slice();
-      const from = order.indexOf(source);
-      const to = order.indexOf(target);
-      if (from < 0 || to < 0) return;
-      order.splice(from, 1);
-      order.splice(to, 0, source);
-      setModuleOrder(order);
-      renderHome();
+      const onMove = (moveEvent) => {
+        const next = heightAt(moveEvent.clientY);
+        section.style.setProperty("--module-height", `${next}px`);
+        section.classList.add("has-height");
+      };
+
+      const onUp = (upEvent) => {
+        try { grip.releasePointerCapture(event.pointerId); } catch (_) { /* ignore */ }
+        section.classList.remove("is-resizing");
+        grip.removeEventListener("pointermove", onMove);
+        grip.removeEventListener("pointerup", onUp);
+        grip.removeEventListener("pointercancel", onUp);
+        setModuleHeight(section.dataset.module, heightAt(upEvent.clientY));
+        renderHome();
+      };
+
+      grip.addEventListener("pointermove", onMove);
+      grip.addEventListener("pointerup", onUp);
+      grip.addEventListener("pointercancel", onUp);
     });
   });
 }

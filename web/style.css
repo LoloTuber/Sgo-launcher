@@ -1744,11 +1744,12 @@ body.is-developer .settings-actions.dev-only { display: flex !important; }
    Р“Р»Р°РІРЅР°СЏ СЃРѕР±РёСЂР°РµС‚СЃСЏ РёР· РЅРµР·Р°РІРёСЃРёРјС‹С… РјРѕРґСѓР»РµР№,
    РїРѕСЂСЏРґРѕРє Рё РІРёРґРёРјРѕСЃС‚СЊ Р·Р°РґР°С‘С‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ.
    ========================================= */
-.home-module { display: block; grid-column: span var(--span, 1); min-width: 0; }
+.home-module { display: block; grid-column: span var(--span, 1); min-width: 0; position: relative; }
 .home-module > .today-card { margin: 0; height: 100%; }
 
 /* Сетка главного экрана: сколько колонок — выбирает пользователь. */
 .home-grid {
+  position: relative;
   display: grid; gap: 12px; align-items: stretch;
   grid-template-columns: repeat(var(--home-cols, 1), minmax(0, 1fr));
 }
@@ -1760,6 +1761,42 @@ body.is-developer .settings-actions.dev-only { display: flex !important; }
   vertical-align: middle; margin-right: 4px;
 }
 .home-module-handle:active { cursor: grabbing; }
+
+/* Рамка-место: показывает ячейку, в которую встанет перетаскиваемый модуль. */
+.home-module-frame {
+  position: absolute; z-index: 5;
+  border: 2px dashed var(--green-500, #2f9e63);
+  border-radius: var(--radius);
+  background: rgba(47, 158, 99, 0.22);
+  color: var(--green-800, #14532d);
+  display: flex; align-items: center; justify-content: center;
+  padding: 8px; text-align: center; font-size: 12.5px; font-weight: 600;
+  pointer-events: none; user-select: none;
+}
+body.dark-theme .home-module-frame {
+  background: rgba(47, 158, 99, 0.30);
+  color: var(--ink);
+}
+
+/* Ручка изменения высоты модуля — в правом нижнем углу. */
+.home-module-resize {
+  position: absolute; right: 6px; bottom: 6px;
+  width: 24px; height: 24px; padding: 0;
+  display: none; place-items: center;
+  border: 1px dashed var(--green-500, #2f9e63); border-radius: 7px;
+  background: var(--white); color: var(--green-700);
+  font-size: 12px; line-height: 1; cursor: ns-resize; touch-action: none;
+}
+#home-content.is-editing .home-module-resize { display: grid; }
+.home-module-resize:hover { background: var(--green-50); }
+.home-module.is-resizing .home-module-resize { background: var(--green-500, #2f9e63); color: #fff; }
+body.dark-theme .home-module-resize { background: var(--white); color: var(--ink); border-color: var(--line); }
+body.dark-theme .home-module-resize:hover { background: var(--green-100); }
+
+/* Заданная высота модуля: содержимое прокручивается внутри карточки. */
+.home-module.has-height { height: var(--module-height, auto); }
+.home-module.has-height > .today-card { overflow: auto; }
+#home-content.is-editing .home-module > .today-card { padding-bottom: 28px; }
 
 .home-summary-chips {
   display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px;
@@ -1846,6 +1883,39 @@ body.is-developer .settings-actions.dev-only { display: flex !important; }
 .settings-pane { display: none; }
 .settings-pane.is-active { display: block; animation: fade 0.15s ease; }
 
+/* --- Настройки открываются поверх экрана, как раньше, но с вкладками --- */
+body.settings-open { overflow: hidden; }
+.settings-modal { z-index: 120; }
+.settings-modal .modal-content {
+  width: min(94vw, 720px); max-width: 720px;
+  padding: 14px 16px 18px;
+  max-height: 88vh; overflow-y: auto;
+}
+.settings-modal .settings-head { align-items: center; margin-bottom: 12px; }
+.settings-modal .settings-head h2 { font-size: 17px; margin: 0; }
+.settings-modal .settings-tabs {
+  position: sticky; top: -14px; z-index: 2;
+  background: var(--green-50);
+}
+body.dark-theme .settings-modal .settings-tabs { background: var(--white); }
+
+/* --- Окно подтверждения (выход из аккаунта и другие важные вопросы) --- */
+#confirm-modal { z-index: 140; }
+.confirm-content { max-width: 400px; }
+.confirm-content h3 { margin: 0 0 6px; }
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+.confirm-actions .btn { padding: 8px 14px; font-size: 13px; }
+.confirm-actions #confirm-ok { background: var(--red); border-color: var(--red); color: #fff; }
+.confirm-actions #confirm-ok:hover { filter: brightness(1.08); }
+body.dark-theme .confirm-actions #confirm-ok { color: #fff; }
+
+@media (max-width: 620px) {
+  .settings-modal .modal-content {
+    width: 100%; max-width: 100%; max-height: 100%; height: 100%;
+    border-radius: 0;
+  }
+}
+
 /* --- РЎРїРёСЃРѕРє РјРѕРґСѓР»РµР№ РіР»Р°РІРЅРѕРіРѕ СЌРєСЂР°РЅР° --- */
 .module-row {
   display: flex; align-items: flex-start; gap: 10px;
@@ -1869,6 +1939,19 @@ body.is-developer .settings-actions.dev-only { display: flex !important; }
 .module-row-hint { font-size: 11.5px; color: var(--ink-soft); }
 .module-row-move { display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto; }
 .module-row-width { display: flex; flex: 0 0 auto; }
+.module-row-height-cell { display: flex; flex: 0 0 auto; }
+.module-row-height {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; color: var(--ink-soft); white-space: nowrap;
+}
+.module-height-reset {
+  width: 22px; height: 22px; padding: 0; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--white); color: var(--ink-soft);
+  cursor: pointer; font-size: 12px; line-height: 1;
+}
+.module-height-reset:hover { background: var(--green-50); color: var(--green-700); }
+body.dark-theme .module-height-reset { background: var(--white); color: var(--ink); }
+body.dark-theme .module-height-reset:hover { background: var(--green-100); }
 .module-width {
   width: 62px; padding: 4px 6px; font-size: 12px; cursor: pointer;
   border: 1px solid var(--line); border-radius: 6px; background: var(--white); color: var(--ink);
